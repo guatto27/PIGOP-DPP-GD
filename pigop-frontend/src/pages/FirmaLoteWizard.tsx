@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   X, FileSignature, Upload, CheckCircle2, AlertTriangle,
   RotateCcw, Shield, Lock, Eye, EyeOff, ChevronRight,
-  FileText, QrCode,
+  QrCode,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {

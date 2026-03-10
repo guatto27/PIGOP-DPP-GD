@@ -22,11 +22,11 @@ import {
 } from 'lucide-react'
 import { lotesApi, type LoteCreate, type LoteListItem } from '../api/lotes'
 import { useAuth } from '../hooks/useAuth'
-import { formatDateTime, formatCurrency } from '../utils'
+import { formatDateTime } from '../utils'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 const GUINDA = '#911A3A'
-const GUINDA_DARK = '#6B1029'
+// const GUINDA_DARK = '#6B1029' // reserved for future use
 
 const MESES = [
   { v: 1, l: 'Enero' }, { v: 2, l: 'Febrero' }, { v: 3, l: 'Marzo' },

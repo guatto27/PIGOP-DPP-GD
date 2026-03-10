@@ -262,7 +262,6 @@ function NormativaCard({ normativa }: { normativa: Normativa }) {
                 fontSize: 11, padding: '2px 8px', borderRadius: 4,
                 background: '#eff6ff', color: '#1d4ed8', fontWeight: 600,
                 cursor: 'default',
-                title: ref.desc,
               }} title={ref.desc}>
                 {ref.art}
               </span>

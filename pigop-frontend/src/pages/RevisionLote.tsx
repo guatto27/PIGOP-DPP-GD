@@ -24,7 +24,7 @@ import {
   CheckCircle2, XCircle, MinusCircle, ArrowLeft, ArrowRight,
   Keyboard, Clock, BarChart3, FileText, AlertTriangle,
   Loader2, ChevronLeft, CheckCheck, User, Building,
-  AlertCircle, Play,
+  AlertCircle,
 } from 'lucide-react'
 import { lotesApi, type Lote, type LoteItem } from '../api/lotes'
 import { formatCurrency, GRAVEDAD_CONFIG, getValidacionLabel } from '../utils'

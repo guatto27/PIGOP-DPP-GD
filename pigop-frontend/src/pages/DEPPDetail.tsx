@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ShieldCheck, BrainCircuit, Upload, X, CheckCircle2,
   AlertTriangle, XCircle, Info, ChevronDown, ChevronUp, Sparkles,
-  Printer, FileText, ChevronRight, Plus, BookOpen,
+  Printer, FileText, Plus, BookOpen,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { deppsApi } from '../api/depps'
@@ -19,7 +19,7 @@ import {
   TIPO_DOC_LABELS, CLASIFICACION_LABELS, CAPITULO_LABELS,
   isIAValidation, getValidacionLabel,
 } from '../utils'
-import type { DEPP, DocumentoDEPP, ValidacionDEPP, TipoDocumento } from '../types'
+import type { DEPP, DocumentoDEPP, TipoDocumento } from '../types'
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 const GUINDA = '#911A3A'

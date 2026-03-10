@@ -2,11 +2,11 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen, Plus, Search, FileText, Trash2, Upload,
-  ChevronDown, X, CheckCircle2, Archive, Clock, Filter,
+  X, CheckCircle2, Clock,
   Wand2, Send, AlertTriangle, Eye, Edit3, RotateCcw,
-  ArrowRight, InboxIcon, SendIcon, Zap, Building2,
+  ArrowRight, InboxIcon, SendIcon, Building2,
   Download, Shield, BookOpen, FileSignature,
-  History, CornerUpLeft, RefreshCw, Copy, Lock, Hash,
+  History, CornerUpLeft, RefreshCw, Lock, Hash,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -19,14 +19,13 @@ import {
   type DocumentoRecibidoCreate, type DocumentoEmitidoCreate,
   type DocumentoUpdate, type PreviewOCRResult,
   type HistorialItem,
-  type TipoDocumento, type Prioridad, type EstadoEmitido,
+  type TipoDocumento, type Prioridad,
   type AreaDPP,
   type PlantillaOficio,
   type CertificadoInfo,
 } from '../api/documentos'
 import { clientesApi } from '../api/depps'
 import { useAuth } from '../hooks/useAuth'
-import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { PageSpinner } from '../components/ui/Spinner'
 import { formatDate, formatDateTime } from '../utils'
@@ -55,7 +54,7 @@ function PlazoChip({ fecha }: { fecha: string | null }) {
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${color}`}>{label}</span>
 }
 
-function EstadoRecibidoBadge({ estado }: { estado: string }) {
+export function EstadoRecibidoBadge({ estado }: { estado: string }) {
   const cfg = ESTADO_RECIBIDO_CONFIG[estado as keyof typeof ESTADO_RECIBIDO_CONFIG]
   if (!cfg) return null
   return (
@@ -377,11 +376,11 @@ function ModalRegistrarRecibido({
                   <p className="text-xs font-semibold text-green-900">
                     {clasificacion.area_nombre as string}
                   </p>
-                  {clasificacion.fundamento && (
+                  {clasificacion.fundamento ? (
                     <p className="text-[10px] text-green-600 mt-0.5 leading-tight">
-                      {clasificacion.fundamento as string}
+                      {String(clasificacion.fundamento)}
                     </p>
-                  )}
+                  ) : null}
                   {ocrResult?.fecha_limite && (
                     <p className="text-[10px] text-green-600 mt-1">
                       Plazo: {clasificacion.plazo_dias as number} dias habiles &rarr; {ocrResult.fecha_limite}
@@ -1060,20 +1059,21 @@ function PanelRecibido({
     finally { setDescargando(false) }
   }
 
-  const handleDescargarConstancia = async () => {
-    try {
-      const res = await (await import('../api/client')).default.get(`/documentos/${doc.id}/constancia-firma`, { responseType: 'blob' })
-      const blob = new Blob([res.data], { type: 'application/pdf' })
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `constancia_firma_${doc.folio_respuesta || doc.id}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      a.remove()
-    } catch { /* PDF endpoint may not be ready yet */ }
-  }
+  // handleDescargarConstancia — reserved for future constancia PDF download
+  // const handleDescargarConstancia = async () => {
+  //   try {
+  //     const res = await (await import('../api/client')).default.get(`/documentos/${doc.id}/constancia-firma`, { responseType: 'blob' })
+  //     const blob = new Blob([res.data], { type: 'application/pdf' })
+  //     const url = window.URL.createObjectURL(blob)
+  //     const a = document.createElement('a')
+  //     a.href = url
+  //     a.download = `constancia_firma_${doc.folio_respuesta || doc.id}.pdf`
+  //     document.body.appendChild(a)
+  //     a.click()
+  //     window.URL.revokeObjectURL(url)
+  //     a.remove()
+  //   } catch { /* PDF endpoint may not be ready yet */ }
+  // }
 
   const handleFirmar = async () => {
     if (!firmaPassword.trim()) return
@@ -1130,7 +1130,7 @@ function PanelRecibido({
     try { await documentosApi.update(doc.id, data); invalidate() } catch { /* */ }
   }
 
-  const areaActual = doc.area_turno || doc.sugerencia_area_codigo || ''
+  // const areaActual = doc.area_turno || doc.sugerencia_area_codigo || ''  // reserved for future use
   const fundamento = doc.sugerencia_fundamento || ''
   const confianza  = doc.confianza_clasificacion
   const datosIA    = doc.datos_extraidos_ia as Record<string, unknown> | null
@@ -1286,7 +1286,7 @@ function PanelRecibido({
             <div className="bg-gray-50 rounded-lg p-3 space-y-1">
               <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Remitente</p>
               {doc.remitente_nombre && <p className="text-xs font-medium text-gray-800">{doc.remitente_nombre}</p>}
-              {doc.remitente_cargo && <p className="text-xs text-gray-600">{doc.remitente_cargo}</p>}
+              {(doc as any).remitente_cargo && <p className="text-xs text-gray-600">{(doc as any).remitente_cargo}</p>}
               {doc.remitente_dependencia && (
                 <p className="text-xs text-gray-500 flex items-center gap-1">
                   <Building2 size={11} /> {doc.remitente_dependencia}
@@ -1651,15 +1651,15 @@ function PanelRecibido({
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Datos extraídos por IA</p>
                 <div className="grid grid-cols-2 gap-1.5">
-                  {[
+                  {([
                     ['No. oficio', datosIA['numero_oficio']],
                     ['Fecha', datosIA['fecha_documento']],
                     ['Remitente', datosIA['remitente_nombre']],
                     ['Dependencia', datosIA['remitente_dependencia']],
-                  ].map(([label, val]) => val && (
-                    <div key={label as string} className="bg-gray-50 rounded-lg px-2 py-1.5">
-                      <span className="text-[9px] text-gray-500">{label as string}</span>
-                      <p className="text-[10px] text-gray-800 font-medium truncate">{val as string}</p>
+                  ] as [string, unknown][]).filter(([, val]) => !!val).map(([label, val]) => (
+                    <div key={label} className="bg-gray-50 rounded-lg px-2 py-1.5">
+                      <span className="text-[9px] text-gray-500">{label}</span>
+                      <p className="text-[10px] text-gray-800 font-medium truncate">{String(val)}</p>
                     </div>
                   ))}
                 </div>
@@ -2102,7 +2102,7 @@ function PanelRecibido({
 }
 
 // ── Tarjeta de documento recibido ─────────────────────────────────────────────
-function TarjetaRecibido({
+export function TarjetaRecibido({
   doc, selected, onClick, multiSelect, multiSelected, onToggleSelect,
 }: {
   doc: DocumentoListItem; selected: boolean; onClick: () => void;
@@ -2181,7 +2181,7 @@ function TarjetaRecibido({
 
 // ── Panel detalle — Emitido ────────────────────────────────────────────────────
 function PanelEmitido({
-  doc, areas, onClose, onRefetch, onDelete,
+  doc, areas: _areas, onClose, onRefetch, onDelete,
 }: { doc: Documento; areas: AreaDPP[]; onClose: () => void; onRefetch: () => void; onDelete: () => void }) {
   const { user } = useAuth()
   const qc = useQueryClient()
@@ -2213,8 +2213,8 @@ function PanelEmitido({
     folio_respuesta: doc.folio_respuesta || '',
   })
   const isDirector = user?.rol === 'admin_cliente' || user?.rol === 'superadmin'
-  const isSecretaria = user?.rol === 'secretaria'
-  const canFirmar = isDirector  // Solo Director firma
+  // const isSecretaria = user?.rol === 'secretaria'  // reserved for future use
+  // const canFirmar = isDirector  // Solo Director firma — reserved for future use
 
   // Auto-cargar original al montar
   useEffect(() => {

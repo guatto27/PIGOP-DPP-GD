@@ -14,10 +14,10 @@ import { Badge } from '../components/ui/Badge'
 import { PageSpinner } from '../components/ui/Spinner'
 import {
   formatCurrency, formatDate,
-  ESTADO_CONFIG, CLASIFICACION_LABELS, CAPITULO_LABELS
+  ESTADO_CONFIG, CAPITULO_LABELS
 } from '../utils'
 import { UPPBadge } from '../components/UPPBadge'
-import type { EstadoDEPP, DEPPCreate } from '../types'
+import type { DEPPCreate } from '../types'
 
 // Colores institucionales
 const GUINDA = '#911A3A'

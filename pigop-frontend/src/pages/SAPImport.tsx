@@ -12,7 +12,7 @@ import {
   Upload, FileSpreadsheet, CheckCircle2, AlertTriangle,
   ArrowRight, ArrowLeft, RotateCcw, ExternalLink,
   Download, Info, Wifi, WifiOff, ChevronRight,
-  FileCheck, XCircle, AlertCircle, Loader2,
+  FileCheck, XCircle, Loader2,
 } from 'lucide-react'
 import { sapApi, type SAPPreviewResponse, type SAPConfirmarResponse } from '../api/sap'
 import { formatCurrency } from '../utils'
