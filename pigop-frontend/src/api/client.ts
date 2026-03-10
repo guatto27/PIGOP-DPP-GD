@@ -1,6 +1,8 @@
 import axios from 'axios'
 
-const BASE_URL = '/api/v1'
+// En desarrollo: '/api/v1' (proxy de Vite → localhost:8000)
+// En producción: VITE_API_URL apunta al backend desplegado
+const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1'
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,
