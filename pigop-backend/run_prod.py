@@ -214,7 +214,7 @@ with sync_engine.connect() as conn:
     if not _existing:
         conn.execute(text(
             "INSERT INTO usuarios "
-            "(id, email, contraseña_hash, nombre_completo, rol, activo, modulos_acceso)"
+            "(id, email, password_hash, nombre_completo, rol, activo, modulos_acceso)"
             "VALUES (:id, :email, :pwd, 'Administrador PIGOP', 'superadmin', 1, :modulos)"
         ), {"id": str(uuid.uuid4()), "email": EMAIL, "pwd": get_password_hash(PWD), "modulos": '["todos"]'})
         conn.commit()
