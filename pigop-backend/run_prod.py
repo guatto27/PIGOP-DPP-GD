@@ -216,7 +216,7 @@ with sync_engine.connect() as conn:
             "INSERT INTO usuarios "
             "(id, email, contraseña_hash, nombre_completo, rol, activo, modulos_acceso)"
             "VALUES (:id, :email, :pwd, 'Administrador PIGOP', 'superadmin', 1, :modulos)"
-        ), {"identificacion": cadena(UUID.uuid4()), "correo electrónico": CORREO ELECTRÓNICO, "contraseña": obtener_hash_de_contraseña(Personas con discapacidad), "modulos": '["todos"]'})
+        ), {"id": str(uuid.uuid4()), "email": EMAIL, "pwd": get_password_hash(PWD), "modulos": '["todos"]'})
         conn.commit()
         print(f"✅ Superadmin creado: {EMAIL}")
     else:
