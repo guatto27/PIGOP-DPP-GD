@@ -208,16 +208,24 @@ with sync_engine.connect() as conn:
         print("✅ Cliente DPP creado")
 
     # ── Superadmin ────────────────────────────────────────────────────────────
-    if not conn.execute(
-        text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": EMAIL}
-    ).fetchone():
+    _existing = conn.execute(
+        text("SELECT id, password_hash FROM usuarios WHERE email=:e"), {"e": EMAIL}
+    ).fetchone()
+    if not _existing:
         conn.execute(text(
             "INSERT INTO usuarios "
             "(id, email, password_hash, nombre_completo, rol, activo) "
             "VALUES (:id, :email, :pwd, 'Administrador PIGOP', 'superadmin', 1)"
         ), {"id": str(uuid.uuid4()), "email": EMAIL, "pwd": get_password_hash(PWD)})
         conn.commit()
-        print(f"✅ Superadmin: {EMAIL}")
+        print(f"✅ Superadmin creado: {EMAIL}")
+    else:
+        # Siempre actualizar el hash por si se creó con columna incorrecta
+        conn.execute(text(
+            "UPDATE usuarios SET password_hash=:pwd WHERE email=:e"
+        ), {"pwd": get_password_hash(PWD), "e": EMAIL})
+        conn.commit()
+        print(f"✅ Superadmin actualizado: {EMAIL}")
 
     # ── Reglas normativas iniciales ───────────────────────────────────────────
     REGLAS = [
@@ -362,12 +370,18 @@ _USUARIOS_PRUEBA = [
 _sync2 = create_engine(DB_SYNC, echo=False)
 with _sync2.connect() as c2:
     for _em, _pw, _nm, _rl in _USUARIOS_PRUEBA:
-        if not c2.execute(text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": _em}).fetchone():
+        _exists = c2.execute(text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": _em}).fetchone()
+        if not _exists:
             c2.execute(text(
                 "INSERT INTO usuarios (id,email,password_hash,nombre_completo,rol,activo) "
                 "VALUES (:id,:email,:pwd,:nombre,:rol,1)"
             ), {"id": str(uuid.uuid4()), "email": _em, "pwd": get_password_hash(_pw),
                 "nombre": _nm, "rol": _rl})
+        else:
+            # Actualizar hash por si se creó con columna incorrecta
+            c2.execute(text(
+                "UPDATE usuarios SET password_hash=:pwd WHERE email=:e"
+            ), {"pwd": get_password_hash(_pw), "e": _em})
     c2.commit()
 _sync2.dispose()
 print("✅ Usuarios de prueba creados")
