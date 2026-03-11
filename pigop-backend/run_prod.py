@@ -400,6 +400,20 @@ print(f"   DB:         {os.environ['DATABASE_URL'][:50]}...")
 print(f"   Email:      {EMAIL}")
 print("=" * 60)
 print()
+# ── RESET TEMPORAL DE CONTRASEÑA ─────────────────────────────────────────────
+import sqlite3 as _sq
+from app.core.security import get_password_hash as _gph
+try:
+        _db_path = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./pigop_prod.db").replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
+        _conn = _sq.connect(_db_path)
+        _conn.execute("UPDATE usuarios SET password_hash=? WHERE email=?", (_gph("Admin.2026!"), "admin@pigop.gob.mx"))
+        _conn.commit()
+        _conn.close()
+        print("✅ Contraseña de admin reseteada a: Admin.2026!")
+except Exception as _e:
+        print(f"⚠️ Reset password error: {_e}")
+    # ── FIN RESET TEMPORAL ────────────────────────────────────────────────────────
+
 
 import uvicorn
 uvicorn.run("app.main:app", host="0.0.0.0", port=PORT, reload=False)
