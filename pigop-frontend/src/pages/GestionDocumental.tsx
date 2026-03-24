@@ -1136,8 +1136,8 @@ function ModalNuevoEmitido({
 
 // ── Panel detalle — Recibido ───────────────────────────────────────────────────
 function PanelRecibido({
-  doc, areas, onClose, onRefetch,
-}: { doc: Documento; areas: AreaDPP[]; onClose: () => void; onRefetch: () => void }) {
+  doc, areas, onClose, onRefetch, onDelete,
+}: { doc: Documento; areas: AreaDPP[]; onClose: () => void; onRefetch: () => void; onDelete?: () => void }) {
   const { user } = useAuth()
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1172,17 +1172,30 @@ function PanelRecibido({
   const refFileRef = useRef<HTMLInputElement>(null)
   // ── Roles reales de la DPP ──
   // Director = admin_cliente (firma, revisa, devuelve)
-  // Área responsable = analista (genera respuesta, edita, envía para firma)
-  // Secretaría = secretaria (registra, turna, consulta)
-  // Superadmin = acceso total (para desarrollo/soporte)
+  // Roles del módulo de Gestión Documental (v4)
+  // N1 Administrador (superadmin) — acceso total
+  // N4 Director (admin_cliente) — firma, consulta total, reasigna, descarga DOCX
+  // N2 Secretaria — carga, turna, elimina, consulta total
+  // N3 Asesor — carga evidencia, redacta, consulta total
+  // N5 Subdirector — redacta, reasigna su área, consulta total
+  // N6 Jefe Depto — redacta, reasigna su área, consulta total
+  // SGC Auditor — solo lectura
   const isDirector = user?.rol === 'admin_cliente'
   const isSuperadmin = user?.rol === 'superadmin'
   const isSecretaria = user?.rol === 'secretaria'
-  const isArea = user?.rol === 'analista'
+  const isAsesor = user?.rol === 'asesor'
+  const isSubdirector = user?.rol === 'subdirector'
+  const isJefeDepto = user?.rol === 'jefe_depto'
+  const isAuditor = user?.rol === 'auditor'
+  const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
   const canTurnar = isDirector || isSecretaria || isSuperadmin
-  const canGenerarRespuesta = isArea || isDirector || isSuperadmin  // Área + Director + Super
-  const canFirmar = isDirector || isSuperadmin  // Director y Administrador pueden firmar
-  const canEnviarParaFirma = isArea || isSuperadmin  // Área envía para firma
+  const canGenerarRespuesta = isArea || isAsesor || isDirector || isSuperadmin
+  const canFirmar = isDirector || isSuperadmin
+  const canEnviarParaFirma = isArea || isAsesor || isSuperadmin
+  const canDescargarDocx = isDirector || isSuperadmin  // Solo Director y Admin descargan DOCX
+  const canEliminar = isSecretaria || isSuperadmin  // Secretaria y Admin eliminan registros
+  const canReasignar = isDirector || isSubdirector || isJefeDepto || isSuperadmin
+  const isReadOnly = isAuditor  // Auditor SGC: solo lectura
 
   // Auto-cargar original al montar
   useEffect(() => {
@@ -1368,7 +1381,16 @@ function PanelRecibido({
             <p className="text-[10px] text-gray-400">{doc.numero_oficio_origen || 'Sin número'}</p>
           </div>
         </div>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0 ml-2"><X size={15} /></button>
+        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+          {canEliminar && onDelete && !doc.firmado_digitalmente && (
+            <button onClick={onDelete}
+              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg font-medium text-red-600 hover:bg-red-50 border border-red-200 transition-colors"
+              title="Eliminar documento">
+              <Trash2 size={10} /> Eliminar
+            </button>
+          )}
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={15} /></button>
+        </div>
       </div>
 
       {/* Banner de éxito post-firma */}
@@ -1414,10 +1436,21 @@ function PanelRecibido({
           </div>
         </div>
       )}
-      {!doc.requiere_respuesta && doc.estado !== 'de_conocimiento' && (
-        <div className="mx-4 mt-2 flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg">
+      {!doc.requiere_respuesta && doc.estado !== 'de_conocimiento' && doc.estado !== 'firmado' && (
+        <div className="mx-4 mt-2 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
           <BookOpen size={12} className="text-blue-600 flex-shrink-0" />
-          <span className="text-[10px] font-medium text-blue-700">Documento para conocimiento — no requiere respuesta</span>
+          <span className="text-[10px] font-medium text-blue-700 flex-1">Documento para conocimiento — no requiere respuesta</span>
+          {['turnado', 'en_atencion'].includes(doc.estado) && (
+            <button
+              onClick={() => estadoMutation.mutate('de_conocimiento')}
+              disabled={estadoMutation.isPending}
+              className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold text-white rounded-md transition-colors bg-cyan-700 hover:bg-cyan-800"
+            >
+              {estadoMutation.isPending
+                ? <><RotateCcw size={10} className="animate-spin" /> Cambiando…</>
+                : <><BookOpen size={10} /> Pasar a conocimiento</>}
+            </button>
+          )}
         </div>
       )}
 
@@ -1696,14 +1729,16 @@ function PanelRecibido({
               <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Estado del trámite</p>
               <PipelineRecibido estado={doc.estado} />
               <div className="flex gap-1 mt-2 flex-wrap">
-                {(['en_atencion', 'respondido'] as const).map(e => (
+                {(['en_atencion', 'respondido', ...(!doc.requiere_respuesta ? ['de_conocimiento'] : [])] as string[]).map(e => (
                   <button key={e} onClick={() => estadoMutation.mutate(e)}
                     disabled={doc.estado === e}
                     className={clsx(
                       'text-[10px] px-2 py-1 rounded-full border transition-colors',
-                      doc.estado === e ? 'border-gray-300 bg-gray-100 text-gray-500 cursor-default' : 'border-gray-200 text-gray-600 hover:bg-gray-50',
+                      doc.estado === e ? 'border-gray-300 bg-gray-100 text-gray-500 cursor-default'
+                        : e === 'de_conocimiento' ? 'border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100'
+                        : 'border-gray-200 text-gray-600 hover:bg-gray-50',
                     )}>
-                    {ESTADO_RECIBIDO_CONFIG[e]?.label}
+                    {ESTADO_RECIBIDO_CONFIG[e as EstadoRecibido]?.label ?? e}
                   </button>
                 ))}
               </div>
@@ -1956,39 +1991,51 @@ function PanelRecibido({
                     </p>
                     {(doc.tabla_imagen_nombre || doc.tabla_datos_json) ? (
                       <div className="space-y-1.5">
-                        <div className="flex items-center gap-2 bg-amber-100 border border-amber-300 rounded-lg px-3 py-2">
-                          <ImageIcon size={14} className="text-amber-700 flex-shrink-0" />
+                        <div className="flex items-center gap-2 bg-green-100 border border-green-300 rounded-lg px-3 py-2">
+                          <CheckCircle2 size={14} className="text-green-700 flex-shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <p className="text-[10px] font-medium text-amber-800 truncate">{doc.tabla_imagen_nombre || 'Tabla cargada'}</p>
+                            <p className="text-[10px] font-medium text-green-800 truncate">{doc.tabla_imagen_nombre || 'Tabla cargada'}</p>
                             {doc.tabla_datos_json && (
-                              <p className="text-[9px] text-amber-600">{doc.tabla_datos_json.length} filas × {doc.tabla_datos_json[0]?.length || 0} columnas (Excel)</p>
+                              <p className="text-[9px] text-green-600">{doc.tabla_datos_json.length} filas × {doc.tabla_datos_json[0]?.length || 0} columnas — Se insertará automáticamente en el DOCX</p>
+                            )}
+                            {doc.tabla_imagen_url && !doc.tabla_datos_json && (
+                              <p className="text-[9px] text-green-600">Imagen cargada — Se insertará automáticamente en el DOCX</p>
                             )}
                           </div>
                           <button onClick={async () => { try { await documentosApi.eliminarTablaImagen(doc.id); invalidate() } catch {} }}
-                            className="p-1 rounded hover:bg-red-100 text-red-400 hover:text-red-600">
+                            className="p-1 rounded hover:bg-red-100 text-red-400 hover:text-red-600" title="Eliminar tabla">
                             <X size={12} />
                           </button>
                         </div>
                         {/* Preview de tabla Excel */}
                         {doc.tabla_datos_json && doc.tabla_datos_json.length > 0 && (
-                          <div className="max-h-32 overflow-auto border border-amber-200 rounded">
+                          <div className="max-h-40 overflow-auto border border-amber-200 rounded">
                             <table className="w-full text-[9px]">
                               <thead><tr className="bg-amber-200">
                                 {doc.tabla_datos_json[0].map((h: string, ci: number) => <th key={ci} className="px-1 py-0.5 text-left font-semibold text-amber-900 border-r border-amber-300 last:border-r-0">{h}</th>)}
                               </tr></thead>
                               <tbody>
-                                {doc.tabla_datos_json.slice(1, 6).map((row: string[], ri: number) => (
+                                {doc.tabla_datos_json.slice(1, 8).map((row: string[], ri: number) => (
                                   <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-amber-50'}>
                                     {row.map((c: string, ci: number) => <td key={ci} className="px-1 py-0.5 border-r border-amber-100 last:border-r-0">{c}</td>)}
                                   </tr>
                                 ))}
-                                {doc.tabla_datos_json.length > 6 && (
-                                  <tr><td colSpan={doc.tabla_datos_json[0].length} className="px-1 py-0.5 text-center text-amber-500 italic">...{doc.tabla_datos_json.length - 6} filas más</td></tr>
+                                {doc.tabla_datos_json.length > 8 && (
+                                  <tr><td colSpan={doc.tabla_datos_json[0].length} className="px-1 py-0.5 text-center text-amber-500 italic">...{doc.tabla_datos_json.length - 8} filas más</td></tr>
                                 )}
                               </tbody>
                             </table>
                           </div>
                         )}
+                        {/* Botón para cambiar tabla */}
+                        <div>
+                          <input id={`tabla-change-${doc.id}`} type="file" accept="image/png,image/jpeg,image/webp,.xlsx,.xls" className="hidden"
+                            onChange={async e => { const f = e.target.files?.[0]; if (f) { try { await documentosApi.cargarTablaImagen(doc.id, f); invalidate() } catch {} }; if (e.target) e.target.value = '' }} />
+                          <button onClick={() => document.getElementById(`tabla-change-${doc.id}`)?.click()}
+                            className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg font-medium transition-colors border border-amber-400 text-amber-700 hover:bg-amber-100">
+                            <Upload size={10} /> Cambiar tabla
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <>
@@ -1997,12 +2044,12 @@ function PanelRecibido({
                         <div className="flex gap-2">
                           <button onClick={() => document.getElementById(`tabla-img-${doc.id}`)?.click()}
                             className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[10px] rounded-lg font-medium transition-colors border border-amber-400 text-amber-700 hover:bg-amber-100">
-                            <Upload size={10} /> Subir imagen o Excel
+                            <Upload size={10} /> Subir imagen (PNG/JPG) o Excel (.xlsx)
                           </button>
                         </div>
-                        {/* Zona de pegado desde clipboard */}
+                        {/* Zona de pegado desde clipboard — NO abre file picker */}
                         <div
-                          className="border-2 border-dashed border-amber-300 rounded-lg p-3 text-center cursor-pointer hover:bg-amber-100 transition-colors"
+                          className="border-2 border-dashed border-amber-300 rounded-lg p-3 text-center cursor-text hover:bg-amber-100 hover:border-amber-500 transition-colors focus:border-amber-600 focus:bg-amber-100 focus:outline-none"
                           tabIndex={0}
                           onPaste={async (e) => {
                             const items = e.clipboardData?.items;
@@ -2019,10 +2066,11 @@ function PanelRecibido({
                               }
                             }
                           }}
-                          onClick={() => document.getElementById(`tabla-img-${doc.id}`)?.click()}
                         >
-                          <p className="text-[9px] text-amber-600 font-medium">Ctrl+V para pegar imagen del portapapeles</p>
-                          <p className="text-[8px] text-amber-400 mt-0.5">Copia la tabla en Excel → haz click aquí → Ctrl+V</p>
+                          <p className="text-[10px] text-amber-700 font-semibold">Pegar imagen del portapapeles</p>
+                          <p className="text-[9px] text-amber-500 mt-1">1. Selecciona la tabla en Excel → Copiar como imagen</p>
+                          <p className="text-[9px] text-amber-500">2. Haz click aquí para activar esta zona</p>
+                          <p className="text-[9px] text-amber-500">3. Presiona Ctrl+V (⌘+V en Mac)</p>
                         </div>
                       </>
                     )}
@@ -2062,13 +2110,15 @@ function PanelRecibido({
 
                 {/* ── Acciones según rol ── */}
                 <div className="space-y-2 pt-1">
-                  {/* Descargar DOCX (todos los roles) */}
-                  <button onClick={handleDescargarOficio} disabled={descargando}
-                    className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium text-white transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
-                    {descargando
-                      ? <><RotateCcw size={12} className="animate-spin" /> Generando DOCX...</>
-                      : <><Download size={12} /> Descargar oficio (.docx)</>}
-                  </button>
+                  {/* Descargar DOCX — solo Director y Administrador */}
+                  {canDescargarDocx && (
+                    <button onClick={handleDescargarOficio} disabled={descargando}
+                      className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium text-white transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                      {descargando
+                        ? <><RotateCcw size={12} className="animate-spin" /> Generando DOCX...</>
+                        : <><Download size={12} /> Descargar oficio (.docx)</>}
+                    </button>
+                  )}
 
                   {doc.firmado_digitalmente ? (
                     <div className="flex items-center justify-center gap-2 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
@@ -2180,12 +2230,14 @@ function PanelRecibido({
                   />
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={handleDescargarOficio} disabled={descargando}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
-                    <Download size={12} /> {descargando ? 'Descargando...' : 'Descargar DOCX'}
-                  </button>
+                  {canDescargarDocx && (
+                    <button onClick={handleDescargarOficio} disabled={descargando}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                      <Download size={12} /> {descargando ? 'Descargando...' : 'Descargar DOCX'}
+                    </button>
+                  )}
                   <button onClick={async () => { await documentosApi.descargarOficioPdf(doc.id) }}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white transition-colors hover:opacity-90"
+                    className={`${canDescargarDocx ? 'flex-1' : 'w-full'} flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white transition-colors hover:opacity-90`}
                     style={{ backgroundColor: GUINDA }}>
                     <Download size={12} /> Descargar PDF
                   </button>
@@ -2276,10 +2328,12 @@ function PanelRecibido({
                 <button onClick={() => setTab('info')} className="text-[10px] font-medium text-emerald-600 hover:text-emerald-800 underline">Ver firma</button>
               </div>
               <div className="flex gap-2">
-                <button onClick={handleDescargarOficio} disabled={descargando}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
-                  <Download size={12} /> {descargando ? 'Descargando...' : 'Descargar DOCX'}
-                </button>
+                {canDescargarDocx && (
+                  <button onClick={handleDescargarOficio} disabled={descargando}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50">
+                    <Download size={12} /> {descargando ? 'Descargando...' : 'Descargar DOCX'}
+                  </button>
+                )}
                 <button onClick={() => {
                   setTab('documento')
                   if (!pdfUrl && !loadingPdf) {
@@ -3080,12 +3134,14 @@ function PanelEmitido({
                   <iframe src={pdfUrl} title="Vista previa" className="w-full h-full" style={{ border: 'none' }} />
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={handleDescargarOficio} disabled={descargando}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                    <Download size={12} /> DOCX
-                  </button>
+                  {canDescargarDocx && (
+                    <button onClick={handleDescargarOficio} disabled={descargando}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                      <Download size={12} /> DOCX
+                    </button>
+                  )}
                   <button onClick={async () => { await documentosApi.descargarOficioPdf(doc.id) }}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white" style={{ backgroundColor: GUINDA }}>
+                    className={`${canDescargarDocx ? 'flex-1' : 'w-full'} flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white`} style={{ backgroundColor: GUINDA }}>
                     <Download size={12} /> PDF
                   </button>
                 </div>
@@ -3240,6 +3296,103 @@ function PanelEmitido({
 }
 
 
+// ── Modal edición rápida de registro (secretaria/admin) ─────────────────────
+function ModalEditarRegistro({ doc, onClose, onSaved }: {
+  doc: DocumentoListItem; onClose: () => void; onSaved: () => void
+}) {
+  const [form, setForm] = useState({
+    numero_oficio_origen: doc.numero_oficio_origen || '',
+    asunto: doc.asunto || '',
+    remitente_nombre: doc.remitente_nombre || '',
+    remitente_dependencia: doc.remitente_dependencia || '',
+    fecha_documento: doc.fecha_documento || '',
+    fecha_recibido: doc.fecha_recibido || '',
+    fecha_limite: doc.fecha_limite || '',
+    prioridad: doc.prioridad || 'normal',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }))
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await documentosApi.update(doc.id, form as any)
+      onSaved()
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Error al guardar')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b">
+          <h3 className="text-sm font-semibold text-gray-900">Modificar registro</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+        </div>
+        <div className="px-5 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
+          <div>
+            <label className="block text-[10px] font-medium text-gray-500 mb-0.5">No. Oficio</label>
+            <input value={form.numero_oficio_origen} onChange={e => set('numero_oficio_origen', e.target.value)}
+              className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Asunto</label>
+            <input value={form.asunto} onChange={e => set('asunto', e.target.value)}
+              className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Remitente</label>
+              <input value={form.remitente_nombre} onChange={e => set('remitente_nombre', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Dependencia</label>
+              <input value={form.remitente_dependencia} onChange={e => set('remitente_dependencia', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Fecha oficio</label>
+              <input type="date" value={form.fecha_documento} onChange={e => set('fecha_documento', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Fecha recibido</label>
+              <input type="date" value={form.fecha_recibido} onChange={e => set('fecha_recibido', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Fecha límite</label>
+              <input type="date" value={form.fecha_limite} onChange={e => set('fecha_limite', e.target.value)}
+                className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-medium text-gray-500 mb-0.5">Prioridad</label>
+            <select value={form.prioridad} onChange={e => set('prioridad', e.target.value)}
+              className="w-full px-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+              <option value="normal">Normal</option>
+              <option value="urgente">Urgente</option>
+              <option value="muy_urgente">Muy urgente</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-3 border-t bg-gray-50 rounded-b-xl">
+          <button onClick={onClose} className="px-4 py-1.5 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100">Cancelar</button>
+          <button onClick={handleSave} disabled={saving}
+            className="px-4 py-1.5 text-xs rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+            {saving ? 'Guardando...' : 'Guardar cambios'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 // ── Página principal ───────────────────────────────────────────────────────────
 export default function GestionDocumental() {
   const { user } = useAuth()
@@ -3255,6 +3408,8 @@ export default function GestionDocumental() {
   const [showModalRecibido, setShowModalRecibido] = useState(false)
   const [showModalEmitido, setShowModalEmitido] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Modal edición rápida (secretaria)
+  const [editDocId, setEditDocId] = useState<string | null>(null)
   // Multi-select para firma por lote
   const [multiSelectMode, setMultiSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -3264,6 +3419,7 @@ export default function GestionDocumental() {
   // Roles
   const isDirector = user?.rol === 'admin_cliente' || user?.rol === 'superadmin'
   const isSecretaria = user?.rol === 'secretaria'
+  const isReadOnly = user?.rol === 'auditor'
 
   // Debounce de búsqueda (300ms)
   useEffect(() => {
@@ -3382,7 +3538,7 @@ export default function GestionDocumental() {
                   {multiSelectMode ? 'Cancelar selección' : 'Firma por lote'}
                 </button>
               )}
-              {tab !== 'oficios' && (
+              {tab !== 'oficios' && !isReadOnly && (
                 <Button size="sm" onClick={() => tab === 'recibidos' ? setShowModalRecibido(true) : setShowModalEmitido(true)}>
                   <Plus size={13} />
                   {tab === 'recibidos' ? 'Registrar recibido' : 'Nuevo emitido'}
@@ -3448,13 +3604,35 @@ export default function GestionDocumental() {
         {/* Alertas por rol */}
         {tab === 'recibidos' && (
           <div className="px-4 py-2 bg-white border-b border-gray-100">
-            {isSecretaria && porEstado('firmado') > 0 && (
-              <button onClick={() => setFiltroEstado('firmado')}
-                className="w-full flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-left hover:bg-emerald-100 transition-colors">
-                <CheckCircle2 size={14} className="text-emerald-600 flex-shrink-0" />
-                <span className="text-xs font-medium text-emerald-700">{porEstado('firmado')} documento{porEstado('firmado') !== 1 ? 's' : ''} firmado{porEstado('firmado') !== 1 ? 's' : ''} listo{porEstado('firmado') !== 1 ? 's' : ''} para despacho</span>
-              </button>
-            )}
+            {/* Alerta secretaria: firmados pendientes de despacho */}
+            {(() => {
+              const firmadosSinDespachar = docs?.filter(d => d.estado === 'firmado' && !d.despachado) ?? []
+              if (!isSecretaria || firmadosSinDespachar.length === 0) return null
+              return (
+                <div className="w-full flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                  <CheckCircle2 size={14} className="text-emerald-600 flex-shrink-0" />
+                  <span className="text-xs font-medium text-emerald-700 flex-1">
+                    {firmadosSinDespachar.length} documento{firmadosSinDespachar.length !== 1 ? 's' : ''} firmado{firmadosSinDespachar.length !== 1 ? 's' : ''} listo{firmadosSinDespachar.length !== 1 ? 's' : ''} para despacho
+                  </span>
+                  <button onClick={() => setFiltroEstado('firmado')}
+                    className="text-[10px] px-2 py-1 rounded font-medium text-emerald-700 hover:bg-emerald-100 border border-emerald-300">
+                    Ver
+                  </button>
+                  <button onClick={async () => {
+                    if (!window.confirm(`¿Marcar ${firmadosSinDespachar.length} documento(s) como despachado(s)?`)) return
+                    try {
+                      await documentosApi.acusarDespachoLote(firmadosSinDespachar.map(d => d.id))
+                      refetch()
+                    } catch {}
+                  }}
+                    className="text-[10px] px-2 py-1 rounded font-medium text-white bg-emerald-600 hover:bg-emerald-700">
+                    Acusar despacho
+                  </button>
+                </div>
+              )
+            })()}
+
+            {/* Alerta director: respondidos para firma */}
             {isDirector && porEstado('respondido') > 0 && (
               <button onClick={() => setFiltroEstado('respondido')}
                 className="w-full flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-left hover:bg-amber-100 transition-colors">
@@ -3462,6 +3640,21 @@ export default function GestionDocumental() {
                 <span className="text-xs font-medium text-amber-700">{porEstado('respondido')} documento{porEstado('respondido') !== 1 ? 's' : ''} pendiente{porEstado('respondido') !== 1 ? 's' : ''} de firma</span>
               </button>
             )}
+
+            {/* Alerta director: turnados de conocimiento */}
+            {(() => {
+              const turnadosConocimiento = docs?.filter(d => d.estado === 'turnado' && !d.requiere_respuesta) ?? []
+              if (!isDirector || turnadosConocimiento.length === 0) return null
+              return (
+                <button onClick={() => setFiltroEstado('turnado')}
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-left hover:bg-blue-100 transition-colors">
+                  <BookOpen size={14} className="text-blue-600 flex-shrink-0" />
+                  <span className="text-xs font-medium text-blue-700">{turnadosConocimiento.length} oficio{turnadosConocimiento.length !== 1 ? 's' : ''} turnado{turnadosConocimiento.length !== 1 ? 's' : ''} para conocimiento</span>
+                </button>
+              )
+            })()}
+
+            {/* Alerta áreas: en atención */}
             {!isDirector && !isSecretaria && porEstado('en_atencion') > 0 && (
               <button onClick={() => setFiltroEstado('en_atencion')}
                 className="w-full flex items-center gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg text-left hover:bg-purple-100 transition-colors">
@@ -3609,6 +3802,9 @@ export default function GestionDocumental() {
                       <th className="px-3 py-2 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Estado</th>
                       <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Atención</th>
                       <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Fecha</th>
+                      {(user?.rol === 'secretaria' || user?.rol === 'superadmin') && (
+                        <th className="px-3 py-2 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Acciones</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -3686,6 +3882,33 @@ export default function GestionDocumental() {
                               {doc.fecha_recibido ? formatDate(doc.fecha_recibido) : doc.creado_en ? formatDate(doc.creado_en) : '—'}
                             </span>
                           </td>
+                          {(user?.rol === 'secretaria' || user?.rol === 'superadmin') && (
+                            <td className="px-3 py-2.5 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                {!doc.firmado_digitalmente && (
+                                  <>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setEditDocId(doc.id) }}
+                                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 rounded font-medium text-blue-600 hover:bg-blue-50 border border-blue-200 transition-colors"
+                                      title="Modificar registro">
+                                      <Edit3 size={10} />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        if (window.confirm(`¿Eliminar "${doc.asunto}"? Esta acción no se puede deshacer.`))
+                                          deleteMutation.mutate(doc.id)
+                                      }}
+                                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 rounded font-medium text-red-600 hover:bg-red-50 border border-red-200 transition-colors"
+                                      title="Eliminar documento">
+                                      <Trash2 size={10} />
+                                    </button>
+                                  </>
+                                )}
+                                {doc.firmado_digitalmente && <span className="text-[9px] text-gray-300">—</span>}
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       )
                     })}
@@ -3764,6 +3987,7 @@ export default function GestionDocumental() {
               areas={areas}
               onClose={() => setSelectedId(null)}
               onRefetch={refetch}
+              onDelete={() => { if (window.confirm('¿Eliminar este documento? Esta acción no se puede deshacer.')) deleteMutation.mutate(selectedDoc.id) }}
             />
           ) : (
             <PanelEmitido
@@ -3776,6 +4000,13 @@ export default function GestionDocumental() {
           )}
         </div>
       )}
+
+      {/* Modal edición rápida — secretaria/admin */}
+      {editDocId && (() => {
+        const editDoc = docs.find(d => d.id === editDocId)
+        if (!editDoc) return null
+        return <ModalEditarRegistro doc={editDoc} onClose={() => setEditDocId(null)} onSaved={() => { setEditDocId(null); refetch() }} />
+      })()}
 
       {/* Modals */}
       {showModalRecibido && (

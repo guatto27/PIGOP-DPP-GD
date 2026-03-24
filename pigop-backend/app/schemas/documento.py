@@ -135,6 +135,7 @@ class DocumentoListResponse(BaseModel):
     motivo_devolucion: Optional[str] = None
     firmado_digitalmente: Optional[bool] = None
     requiere_respuesta: bool = True
+    despachado:       Optional[bool] = False
     has_borrador:     bool = False
     tags:             Optional[List[str]]
     creado_en:        datetime

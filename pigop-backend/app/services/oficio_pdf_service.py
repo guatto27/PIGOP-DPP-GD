@@ -63,6 +63,8 @@ class OficioPdfService:
         incluir_firma_visual: bool = False,
         sello_digital_data: Optional[dict] = None,
         asunto: Optional[str] = None,
+        tabla_imagen_path: Optional[str] = None,
+        tabla_datos_json: Optional[list] = None,
     ) -> bytes:
         """
         Genera un PDF del oficio institucional.
@@ -145,20 +147,10 @@ class OficioPdfService:
             elements.append(Spacer(1, 2))
 
         elements.append(Paragraph(
-            '<font color="#911A3A"><b>Gobierno del Estado de Michoacán de Ocampo</b></font>',
-            ParagraphStyle("H1", parent=s_left, fontSize=9, textColor=GUINDA),
+            '<b>Gobierno del Estado<br/>de Michoacán de Ocampo</b>',
+            ParagraphStyle("H1", parent=s_left, fontSize=8, textColor=colors.HexColor("#333333")),
         ))
-
-        # Línea separadora guinda
-        elements.append(Spacer(1, 4))
-        elements.append(Table(
-            [[""]],
-            colWidths=[doc.width],
-            style=TableStyle([
-                ("LINEBELOW", (0, 0), (-1, -1), 1.5, GUINDA),
-            ]),
-        ))
-        elements.append(Spacer(1, 10))
+        elements.append(Spacer(1, 6))
 
         # ── Recuadro institucional (tabla derecha) ──────────────────────────
         asunto_corto = self._truncar_asunto(asunto or "El que se indica")
@@ -236,6 +228,26 @@ class OficioPdfService:
                 )
                 elements.append(Paragraph(safe_text, s_justify))
 
+        # ── Tabla Excel o imagen (si se subió) ──────────────────────────
+        if tabla_datos_json and len(tabla_datos_json) > 0:
+            elements.append(Spacer(1, 8))
+            self._add_tabla_datos_pdf(elements, doc, tabla_datos_json)
+            elements.append(Spacer(1, 8))
+        elif tabla_imagen_path:
+            import os
+            if os.path.exists(tabla_imagen_path):
+                elements.append(Spacer(1, 8))
+                tabla_img = Image(tabla_imagen_path)
+                # Escalar al ancho disponible manteniendo proporción
+                max_w = doc.width
+                iw, ih = tabla_img.imageWidth, tabla_img.imageHeight
+                if iw > 0 and ih > 0:
+                    ratio = min(max_w / iw, 1.0)
+                    tabla_img._restrictSize(iw * ratio, ih * ratio)
+                tabla_img.hAlign = "CENTER"
+                elements.append(tabla_img)
+                elements.append(Spacer(1, 8))
+
         elements.append(Spacer(1, 14))
 
         # ── ATENTAMENTE ───────────────────────────────────────────────────
@@ -300,6 +312,50 @@ class OficioPdfService:
         # ── Build ───────────────────────────────────────────────────────────
         doc.build(elements)
         return buffer.getvalue()
+
+    def _add_tabla_datos_pdf(self, elements: list, doc, tabla_datos: list[list[str]]) -> None:
+        """Inserta una tabla con datos Excel en el PDF."""
+        if not tabla_datos or not tabla_datos[0]:
+            return
+
+        num_cols = max(len(row) for row in tabla_datos)
+        # Calcular ancho de columnas proporcional
+        col_width = doc.width / num_cols
+
+        s_cell = ParagraphStyle(
+            "TabCell", fontSize=7, fontName="Helvetica", leading=9,
+            textColor=colors.HexColor("#333333"),
+        )
+        s_cell_header = ParagraphStyle(
+            "TabCellH", fontSize=7, fontName="Helvetica-Bold", leading=9,
+            textColor=colors.HexColor("#333333"),
+        )
+
+        table_rows = []
+        for i, row_data in enumerate(tabla_datos):
+            style = s_cell_header if i == 0 else s_cell
+            cells = []
+            for j in range(num_cols):
+                cell_text = row_data[j] if j < len(row_data) else ""
+                safe = cell_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                cells.append(Paragraph(safe, style))
+            table_rows.append(cells)
+
+        pdf_table = Table(table_rows, colWidths=[col_width] * num_cols)
+        style_cmds = [
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#333333")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#999999")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            # Header row background
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8E8E8")),
+        ]
+        pdf_table.setStyle(TableStyle(style_cmds))
+        pdf_table.hAlign = "CENTER"
+        elements.append(pdf_table)
 
     @staticmethod
     def _truncar_asunto(asunto: str, max_chars: int = 55) -> str:

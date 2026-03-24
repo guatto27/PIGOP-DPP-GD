@@ -16,6 +16,7 @@ import {
   type EstadoRecibido,
 } from '../api/documentos'
 import { apiClient } from '../api/client'
+import { useAuth } from '../hooks/useAuth'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { Badge } from '../components/ui/Badge'
@@ -58,13 +59,27 @@ async function exportarExcelRecibidos(filters: {
 
 // ── Modal Detalle ───────────────────────────────────────────────────────────
 
-function ModalDetalle({ doc, folio, onClose }: { doc: DocumentoListItem; folio: number; onClose: () => void }) {
+function ModalDetalle({ doc, folio, onClose, userRol }: { doc: DocumentoListItem; folio: number; onClose: () => void; userRol: string }) {
+  const canDownloadDocx = userRol === 'superadmin' || userRol === 'admin_cliente'
   const estadoCfg = ESTADO_RECIBIDO_CONFIG[doc.estado as EstadoRecibido]
+  const isFirmado = doc.firmado_digitalmente || doc.estado === 'firmado'
+  const hasBorrador = doc.has_borrador
+
+  // Tab: "original" = archivo recibido, "respuesta" = oficio de respuesta firmado
+  const [tab, setTab] = useState<'original' | 'respuesta'>(isFirmado && hasBorrador ? 'respuesta' : 'original')
+
+  // Preview archivo original
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState(false)
   const hasFile = !!doc.nombre_archivo
 
+  // Preview oficio respuesta (PDF)
+  const [respuestaUrl, setRespuestaUrl] = useState<string | null>(null)
+  const [respuestaLoading, setRespuestaLoading] = useState(false)
+  const [respuestaError, setRespuestaError] = useState(false)
+
+  // Cargar archivo original
   useEffect(() => {
     if (!hasFile) return
     let cancelled = false
@@ -77,7 +92,20 @@ function ModalDetalle({ doc, folio, onClose }: { doc: DocumentoListItem; folio: 
     return () => { cancelled = true }
   }, [doc.id, hasFile])
 
-  const handleDownload = async () => {
+  // Cargar oficio respuesta PDF cuando tiene borrador
+  useEffect(() => {
+    if (!hasBorrador) return
+    let cancelled = false
+    setRespuestaLoading(true)
+    setRespuestaError(false)
+    documentosApi.obtenerOficioPdfUrl(doc.id)
+      .then((url) => { if (!cancelled) setRespuestaUrl(url) })
+      .catch(() => { if (!cancelled) setRespuestaError(true) })
+      .finally(() => { if (!cancelled) setRespuestaLoading(false) })
+    return () => { cancelled = true }
+  }, [doc.id, hasBorrador])
+
+  const handleDownloadOriginal = async () => {
     try {
       const url = previewUrl ?? await documentosApi.obtenerArchivoOriginalUrl(doc.id)
       const a = document.createElement('a')
@@ -89,27 +117,89 @@ function ModalDetalle({ doc, folio, onClose }: { doc: DocumentoListItem; folio: 
     }
   }
 
+  const handleDownloadDocx = async () => {
+    try { await documentosApi.descargarOficio(doc.id) } catch { /* silently fail */ }
+  }
+
+  const handleDownloadPdf = async () => {
+    try { await documentosApi.descargarOficioPdf(doc.id) } catch { /* silently fail */ }
+  }
+
   const isPdf = doc.nombre_archivo?.toLowerCase().endsWith('.pdf')
   const isImage = /\.(jpe?g|png|webp|tiff?)$/i.test(doc.nombre_archivo ?? '')
+
+  const showTabs = hasBorrador && hasFile
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl mx-4 max-h-[92vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0">
-          <h2 className="text-lg font-bold" style={{ color: GUINDA }}>
-            Oficio — Folio #{folio}
-          </h2>
+          <div>
+            <h2 className="text-lg font-bold" style={{ color: GUINDA }}>
+              Oficio — Folio #{folio}
+            </h2>
+            {isFirmado && (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-green-100 text-green-700 mt-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                Firmado digitalmente
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
-            {hasFile && (
-              <Button variant="secondary" size="sm" onClick={handleDownload}>
+            {tab === 'original' && hasFile && (
+              <Button variant="secondary" size="sm" onClick={handleDownloadOriginal}>
                 <Download className="w-4 h-4 mr-1.5" />
-                Descargar
+                Descargar Original
               </Button>
+            )}
+            {tab === 'respuesta' && hasBorrador && (
+              <>
+                {canDownloadDocx && (
+                  <Button variant="secondary" size="sm" onClick={handleDownloadDocx}>
+                    <FileText className="w-4 h-4 mr-1.5" />
+                    DOCX
+                  </Button>
+                )}
+                <Button variant="secondary" size="sm" onClick={handleDownloadPdf}>
+                  <Download className="w-4 h-4 mr-1.5" />
+                  PDF
+                </Button>
+              </>
             )}
             <button onClick={onClose} className="p-1 rounded hover:bg-gray-100 text-gray-500">✕</button>
           </div>
         </div>
+
+        {/* Tabs si hay ambos documentos */}
+        {showTabs && (
+          <div className="flex border-b flex-shrink-0">
+            <button
+              onClick={() => setTab('original')}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                tab === 'original'
+                  ? 'border-b-2 text-gray-800'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+              style={tab === 'original' ? { borderBottomColor: GUINDA, color: GUINDA } : {}}
+            >
+              <Mail className="w-4 h-4 inline mr-1.5" />
+              Oficio Recibido
+            </button>
+            <button
+              onClick={() => setTab('respuesta')}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                tab === 'respuesta'
+                  ? 'border-b-2 text-gray-800'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+              style={tab === 'respuesta' ? { borderBottomColor: GUINDA, color: GUINDA } : {}}
+            >
+              <FileText className="w-4 h-4 inline mr-1.5" />
+              Oficio de Respuesta {isFirmado ? '(Firmado)' : ''}
+            </button>
+          </div>
+        )}
 
         {/* Body: datos + preview lado a lado */}
         <div className="flex-1 overflow-hidden flex min-h-0">
@@ -139,55 +229,86 @@ function ModalDetalle({ doc, folio, onClose }: { doc: DocumentoListItem; folio: 
             </div>
             {doc.area_turno_nombre && <InfoRow label="Área Turno" value={doc.area_turno_nombre} />}
             {doc.fecha_limite && <InfoRow label="Fecha Límite" value={doc.fecha_limite} />}
-            {doc.nombre_archivo && (
-              <InfoRow label="Archivo" value={doc.nombre_archivo} />
-            )}
+            {doc.nombre_archivo && <InfoRow label="Archivo" value={doc.nombre_archivo} />}
           </div>
 
           {/* Panel derecho: previsualización */}
           <div className="flex-1 bg-gray-50 flex items-center justify-center overflow-hidden">
-            {!hasFile ? (
-              <div className="text-center text-gray-400 p-8">
-                <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">Sin archivo adjunto</p>
-              </div>
-            ) : previewLoading ? (
-              <div className="text-center text-gray-400">
-                <Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" />
-                <p className="text-sm">Cargando previsualización...</p>
-              </div>
-            ) : previewError ? (
-              <div className="text-center text-gray-400 p-8">
-                <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No se pudo cargar la previsualización</p>
-                <Button variant="secondary" size="sm" className="mt-3" onClick={handleDownload}>
-                  <Download className="w-4 h-4 mr-1.5" />
-                  Descargar archivo
-                </Button>
-              </div>
-            ) : previewUrl && isPdf ? (
-              <iframe
-                src={previewUrl}
-                className="w-full h-full border-0"
-                title="Previsualización del oficio"
-              />
-            ) : previewUrl && isImage ? (
-              <img
-                src={previewUrl}
-                alt="Previsualización del oficio"
-                className="max-w-full max-h-full object-contain p-4"
-              />
-            ) : previewUrl ? (
-              <div className="text-center text-gray-400 p-8">
-                <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
-                <p className="text-sm mb-1">{doc.nombre_archivo}</p>
-                <p className="text-xs text-gray-300 mb-3">Formato no previsualizable</p>
-                <Button variant="secondary" size="sm" onClick={handleDownload}>
-                  <Download className="w-4 h-4 mr-1.5" />
-                  Descargar archivo
-                </Button>
-              </div>
-            ) : null}
+            {/* === TAB ORIGINAL === */}
+            {tab === 'original' && (
+              <>
+                {!hasFile ? (
+                  <div className="text-center text-gray-400 p-8">
+                    <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
+                    <p className="text-sm">Sin archivo adjunto</p>
+                  </div>
+                ) : previewLoading ? (
+                  <div className="text-center text-gray-400">
+                    <Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" />
+                    <p className="text-sm">Cargando previsualización...</p>
+                  </div>
+                ) : previewError ? (
+                  <div className="text-center text-gray-400 p-8">
+                    <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
+                    <p className="text-sm">No se pudo cargar la previsualización</p>
+                    <Button variant="secondary" size="sm" className="mt-3" onClick={handleDownloadOriginal}>
+                      <Download className="w-4 h-4 mr-1.5" />
+                      Descargar archivo
+                    </Button>
+                  </div>
+                ) : previewUrl && isPdf ? (
+                  <iframe src={previewUrl} className="w-full h-full border-0" title="Oficio recibido" />
+                ) : previewUrl && isImage ? (
+                  <img src={previewUrl} alt="Oficio recibido" className="max-w-full max-h-full object-contain p-4" />
+                ) : previewUrl ? (
+                  <div className="text-center text-gray-400 p-8">
+                    <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
+                    <p className="text-sm mb-1">{doc.nombre_archivo}</p>
+                    <p className="text-xs text-gray-300 mb-3">Formato no previsualizable</p>
+                    <Button variant="secondary" size="sm" onClick={handleDownloadOriginal}>
+                      <Download className="w-4 h-4 mr-1.5" />
+                      Descargar archivo
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            )}
+
+            {/* === TAB RESPUESTA === */}
+            {tab === 'respuesta' && (
+              <>
+                {!hasBorrador ? (
+                  <div className="text-center text-gray-400 p-8">
+                    <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
+                    <p className="text-sm">No se ha generado oficio de respuesta</p>
+                  </div>
+                ) : respuestaLoading ? (
+                  <div className="text-center text-gray-400">
+                    <Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" />
+                    <p className="text-sm">Generando vista previa del oficio...</p>
+                  </div>
+                ) : respuestaError ? (
+                  <div className="text-center text-gray-400 p-8">
+                    <FileText className="w-16 h-16 mx-auto mb-3 opacity-40" />
+                    <p className="text-sm">No se pudo generar la vista previa</p>
+                    <div className="flex gap-2 mt-3 justify-center">
+                      {canDownloadDocx && (
+                        <Button variant="secondary" size="sm" onClick={handleDownloadDocx}>
+                          <FileText className="w-4 h-4 mr-1.5" />
+                          Descargar DOCX
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={handleDownloadPdf}>
+                        <Download className="w-4 h-4 mr-1.5" />
+                        Descargar PDF
+                      </Button>
+                    </div>
+                  </div>
+                ) : respuestaUrl ? (
+                  <iframe src={respuestaUrl} className="w-full h-full border-0" title="Oficio de respuesta" />
+                ) : null}
+              </>
+            )}
           </div>
         </div>
 
@@ -212,6 +333,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 // ── Página principal ────────────────────────────────────────────────────────
 
 export default function ControlOficios() {
+  const { user } = useAuth()
   // Filtros
   const [fechaDesde, setFechaDesde] = useState('')
   const [fechaHasta, setFechaHasta] = useState('')
@@ -451,7 +573,7 @@ export default function ControlOficios() {
 
       {/* Modal detalle */}
       {detalle && (
-        <ModalDetalle doc={detalle.doc} folio={detalle.folio} onClose={() => setDetalle(null)} />
+        <ModalDetalle doc={detalle.doc} folio={detalle.folio} onClose={() => setDetalle(null)} userRol={user?.rol ?? ''} />
       )}
     </div>
   )

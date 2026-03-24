@@ -60,6 +60,7 @@ export interface DocumentoListItem {
   motivo_devolucion: string | null
   firmado_digitalmente: boolean | null
   requiere_respuesta: boolean
+  despachado:       boolean
   has_borrador:     boolean
   creado_en:        string
 }
@@ -549,7 +550,18 @@ export const documentosApi = {
   },
 
   delete: async (id: string): Promise<{ message: string; success: boolean }> => {
-    const res = await apiClient.delete(`/documentos/${id}`)
+    const res = await apiClient.delete(`/documentos/${id}?confirmar=si`)
+    return res.data
+  },
+
+  // ── Despacho (secretaria) ──
+  acusarDespacho: async (id: string): Promise<Documento> => {
+    const res = await apiClient.post(`/documentos/${id}/acusar-despacho`)
+    return res.data
+  },
+
+  acusarDespachoLote: async (ids: string[]): Promise<{ message: string; success: boolean }> => {
+    const res = await apiClient.post('/documentos/acusar-despacho-lote', { ids })
     return res.data
   },
 

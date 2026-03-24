@@ -102,6 +102,10 @@ _NUEVAS_COLUMNAS_DOC = [
     "ALTER TABLE documentos_oficiales ADD COLUMN devuelto_por_id VARCHAR(36)",
     "ALTER TABLE documentos_oficiales ADD COLUMN devuelto_en DATETIME",
     "ALTER TABLE documentos_oficiales ADD COLUMN motivo_devolucion TEXT",
+    # ── Despacho por secretaria ──
+    "ALTER TABLE documentos_oficiales ADD COLUMN despachado INTEGER DEFAULT 0",
+    "ALTER TABLE documentos_oficiales ADD COLUMN despachado_por_id VARCHAR(36)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN despachado_en DATETIME",
 ]
 with sync_engine.connect() as _mc:
     for _stmt in _NUEVAS_COLUMNAS_DOC:
@@ -201,6 +205,40 @@ with sync_engine.connect() as conn:
         ), {"id": str(uuid.uuid4()), "email": EMAIL, "pwd": get_password_hash(PWD)})
         conn.commit()
         print(f"✅ Superadmin: {EMAIL}")
+
+    # ── Obtener cliente_id DPP ───────────────────────────────────────────────
+    _dpp_row = conn.execute(text("SELECT id FROM clientes WHERE codigo_upp='DPP'")).fetchone()
+    _dpp_id = _dpp_row[0] if _dpp_row else None
+
+    # ── Usuarios de prueba (tabla de permisos Gestión Documental v4) ────────
+    _usuarios_gd = [
+        # (email, password, nombre, rol)
+        ("director@pigop.gob.mx", "Dir2026!", "Mtro. Marco Antonio Flores Mejía", "admin_cliente"),
+        ("secretaria@pigop.gob.mx", "Sec2026!", "Berenice Huerta Silva", "secretaria"),
+        ("asesor@pigop.gob.mx", "Ase2026!", "René Emilio Rico García", "asesor"),
+        ("subcep@pigop.gob.mx", "Sub2026!", "Eduardo Cortés Jaramillo", "subdirector"),
+        ("jdcpres@pigop.gob.mx", "Jef2026!", "Blanca Esthela Ortíz Soto", "jefe_depto"),
+        ("jdregej@pigop.gob.mx", "Jef2026!", "Luis Alberto Sánchez León", "jefe_depto"),
+        ("subpyf@pigop.gob.mx", "Sub2026!", "José Luis Pardo Escutia", "subdirector"),
+        ("jdasyp@pigop.gob.mx", "Jef2026!", "Seomara Mendoza Cárdenas", "jefe_depto"),
+        ("jdfyn@pigop.gob.mx", "Jef2026!", "Hugo Díaz Arechiaga", "jefe_depto"),
+        ("auditor@pigop.gob.mx", "Aud2026!", "Auditor SGC", "auditor"),
+    ]
+    for _em, _pw, _nm, _rl in _usuarios_gd:
+        existing = conn.execute(text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": _em}).fetchone()
+        if not existing:
+            conn.execute(text(
+                "INSERT INTO usuarios "
+                "(id, email, password_hash, nombre_completo, rol, activo, cliente_id, modulos_acceso) "
+                "VALUES (:id, :email, :pwd, :nombre, :rol, 1, :cid, :modulos)"
+            ), {"id": str(uuid.uuid4()), "email": _em, "pwd": get_password_hash(_pw),
+                "nombre": _nm, "rol": _rl, "cid": _dpp_id, "modulos": '["todos"]'})
+        else:
+            conn.execute(text(
+                "UPDATE usuarios SET password_hash=:pwd, nombre_completo=:nombre, rol=:rol, cliente_id=:cid WHERE email=:e"
+            ), {"pwd": get_password_hash(_pw), "nombre": _nm, "rol": _rl, "cid": _dpp_id, "e": _em})
+    conn.commit()
+    print(f"✅ {len(_usuarios_gd)} usuarios de Gestión Documental creados/actualizados")
 
     # ── Reglas normativas iniciales ───────────────────────────────────────────
     # Campos: codigo, articulo, titulo, descripcion, tipo_validacion,

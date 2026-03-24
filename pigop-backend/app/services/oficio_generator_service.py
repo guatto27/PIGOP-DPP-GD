@@ -516,6 +516,8 @@ class OficioGeneratorService:
         Detecta tablas markdown y bloques [TABLA]...[/TABLA] y los convierte en tablas Word.
         Si hay tabla_datos_json, inserta una tabla Word real con esos datos.
         Si hay tabla_imagen_path, inserta la imagen en lugar de la primera tabla detectada.
+        IMPORTANTE: Si se subió tabla (Excel o imagen) y el texto de la IA no contiene
+        marcadores de tabla, la tabla se inserta al final del cuerpo automáticamente.
         """
         # Preprocesar: convertir [TABLA]...[/TABLA] a formato markdown pipe
         text = self._preprocess_tabla_blocks(text)
@@ -588,6 +590,13 @@ class OficioGeneratorService:
                 run = p.add_run(paragraph_text)
                 run.font.name = "Arial"
                 run.font.size = Pt(11)
+
+        # ── GARANTÍA: Si se subió tabla y NO se insertó durante el recorrido,
+        #    insertarla al final del cuerpo (después del último párrafo) ──
+        if tabla_datos_json and not tabla_excel_usada:
+            self._add_excel_table(doc, tabla_datos_json)
+        elif tabla_imagen_path and not tabla_imagen_usada:
+            self._add_table_image(doc, tabla_imagen_path)
 
     def _add_table_image(self, doc: Document, image_path: str) -> None:
         """Inserta una imagen de tabla/cuadro en el documento."""

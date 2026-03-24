@@ -48,7 +48,7 @@ class UsuarioBase(BaseModel):
     nombre_completo: Optional[str] = None
     rol: str = Field(
         default="analista",
-        description="superadmin | admin_cliente | secretaria | analista | consulta",
+        description="superadmin | admin_cliente | secretaria | asesor | subdirector | jefe_depto | analista | auditor | consulta",
     )
     activo: bool = True
     modulos_acceso: List[str] = Field(

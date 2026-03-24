@@ -5,7 +5,7 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_active_user
@@ -606,6 +606,62 @@ async def acusar_conocimiento(
         db, db_obj=doc, usuario_id=str(current_user.id), area_nombre=area_nombre,
     )
     return await crud_documento.get_with_relations(db, doc.id)
+
+
+# ---------- Acusar despacho (secretaria) --------------------------------------
+
+@router.post(
+    "/{doc_id}/acusar-despacho",
+    response_model=DocumentoResponse,
+    summary="Secretaria acusa despacho de documento firmado",
+)
+async def acusar_despacho(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """Secretaria marca que el documento firmado ya fue despachado físicamente."""
+    if current_user.rol not in ("secretaria", "superadmin"):
+        raise ForbiddenError("Solo Secretaría o Administrador pueden acusar despacho.")
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+    if not doc.firmado_digitalmente:
+        raise BusinessError("Solo documentos firmados pueden acusarse como despachados.")
+    from datetime import datetime, timezone
+    await crud_documento.update(db, db_obj=doc, obj_in={
+        "despachado": True,
+        "despachado_por_id": str(current_user.id),
+        "despachado_en": datetime.now(timezone.utc),
+    })
+    return await crud_documento.get_with_relations(db, doc.id)
+
+
+@router.post(
+    "/acusar-despacho-lote",
+    response_model=MessageResponse,
+    summary="Acusar despacho de múltiples documentos firmados",
+)
+async def acusar_despacho_lote(
+    ids: List[str] = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """Secretaria marca múltiples documentos firmados como despachados."""
+    if current_user.rol not in ("secretaria", "superadmin"):
+        raise ForbiddenError("Solo Secretaría o Administrador pueden acusar despacho.")
+    from datetime import datetime, timezone
+    count = 0
+    for doc_id in ids:
+        doc = await crud_documento.get(db, doc_id)
+        if doc and doc.firmado_digitalmente and not doc.despachado:
+            await crud_documento.update(db, db_obj=doc, obj_in={
+                "despachado": True,
+                "despachado_por_id": str(current_user.id),
+                "despachado_en": datetime.now(timezone.utc),
+            })
+            count += 1
+    return MessageResponse(message=f"{count} documento(s) marcado(s) como despachado(s)", success=True)
 
 
 # ---------- Procesar OCR -----------------------------------------------------
@@ -1298,7 +1354,11 @@ async def descargar_oficio(
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(get_current_active_user),
 ):
-    """Genera un documento DOCX con formato institucional y lo retorna para descarga."""
+    """Genera un documento DOCX con formato institucional y lo retorna para descarga.
+    Solo admin_cliente (Director) y superadmin pueden descargar en DOCX.
+    Los demás roles solo pueden descargar PDF."""
+    if current_user.rol not in ("admin_cliente", "superadmin"):
+        raise ForbiddenError("Solo Director o Administrador pueden descargar en formato Word. Use la descarga en PDF.")
     doc = await crud_documento.get_with_relations(db, doc_id)
     if not doc:
         raise NotFoundError("Documento no encontrado.")
@@ -1937,6 +1997,10 @@ async def descargar_oficio_pdf(
             "administrativas" if pdf_area == "DIR" else "presupuestales"
         )
 
+    # Tabla: imagen o datos Excel extraídos (igual que DOCX)
+    pdf_tabla_img = doc.tabla_imagen_url if hasattr(doc, 'tabla_imagen_url') and doc.tabla_imagen_url and os.path.exists(doc.tabla_imagen_url) else None
+    pdf_tabla_datos = doc.tabla_datos_json if hasattr(doc, 'tabla_datos_json') else None
+
     pdf_bytes = oficio_pdf_service.generar_oficio_pdf(
         folio_respuesta=doc.folio_respuesta or "SFA/SF/DPP/____/2026",
         fecha_respuesta=fecha_str,
@@ -1955,6 +2019,8 @@ async def descargar_oficio_pdf(
         incluir_firma_visual=bool(doc.firmado_digitalmente),
         sello_digital_data=sello_data,
         asunto=doc.asunto,
+        tabla_imagen_path=pdf_tabla_img,
+        tabla_datos_json=pdf_tabla_datos,
     )
 
     import io

@@ -148,6 +148,11 @@ class DocumentoOficial(Base):
     atendido_en     = Column(DateTime(timezone=True), nullable=True)
     atendido_area   = Column(String(200), nullable=True)
 
+    # ── Despacho por secretaria (cierre de ciclo) ──────────────────────────────
+    despachado       = Column(Boolean, default=False)
+    despachado_por_id = Column(String(36), ForeignKey("usuarios.id"), nullable=True)
+    despachado_en    = Column(DateTime(timezone=True), nullable=True)
+
     # ── Vinculación con otros módulos ─────────────────────────────────────────
     certificacion_id = Column(String(36), nullable=True)   # FK futuro a Certificaciones
     # Estado sincronizado desde módulo externo (certificaciones, minutas, etc.)

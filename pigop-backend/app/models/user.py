@@ -42,7 +42,7 @@ class Usuario(Base):
     password_hash = Column(String(255), nullable=False)
     nombre_completo = Column(String(255), nullable=True)
 
-    # superadmin | admin_cliente | secretaria | analista | consulta
+    # superadmin | admin_cliente | secretaria | asesor | subdirector | jefe_depto | analista | auditor | consulta
     rol = Column(String(50), nullable=False, default="analista")
 
     # Módulos a los que tiene acceso (JSON array)
