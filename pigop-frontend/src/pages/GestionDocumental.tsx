@@ -182,7 +182,6 @@ function ModalRegistrarRecibido({
   const [fileName, setFileName] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const _canvasRef = useRef<HTMLCanvasElement>(null)
   const [cropImage, setCropImage] = useState<HTMLImageElement | null>(null)
   const [cropFile, setCropFile] = useState<File | null>(null)
 
@@ -1183,9 +1182,6 @@ function PanelRecibido({
   const isSuperadmin = user?.rol === 'superadmin'
   const isSecretaria = user?.rol === 'secretaria'
   const isAsesor = user?.rol === 'asesor'
-  const isSubdirector = user?.rol === 'subdirector'
-  const isJefeDepto = user?.rol === 'jefe_depto'
-  const isAuditor = user?.rol === 'auditor'
   const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
   const canTurnar = isDirector || isSecretaria || isSuperadmin
   const canGenerarRespuesta = isArea || isAsesor || isDirector || isSuperadmin
