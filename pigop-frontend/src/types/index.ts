@@ -15,7 +15,7 @@ export interface Usuario {
   id: string
   email: string
   nombre_completo: string
-  rol: 'superadmin' | 'admin_cliente' | 'secretaria' | 'analista' | 'consulta'
+  rol: 'superadmin' | 'admin_cliente' | 'secretaria' | 'analista' | 'consulta' | 'auditor'
   activo: boolean
   cliente_id: string | null
   modulos_acceso: string[]

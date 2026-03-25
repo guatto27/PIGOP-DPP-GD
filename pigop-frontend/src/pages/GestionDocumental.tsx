@@ -3286,7 +3286,7 @@ function PanelEmitido({
         <VisorFlotante
           url={pdfUrl}
           titulo={`${doc.folio_respuesta || doc.numero_control || doc.asunto}`}
-          firmado={doc.firmado_digitalmente}
+          firmado={doc.firmado_digitalmente ?? undefined}
           onClose={() => setVisorFlotanteEmitido(false)}
           onDownload={() => documentosApi.descargarOficioPdf(doc.id)}
         />
@@ -3516,7 +3516,7 @@ export default function GestionDocumental() {
                 </button>
               )}
 
-              {tab === 'recibidos' && isDirector && tab !== 'oficios' && (
+              {tab === 'recibidos' && isDirector && (
                 <button
                   onClick={() => {
                     if (multiSelectMode) {
@@ -4003,7 +4003,7 @@ export default function GestionDocumental() {
 
       {/* Modal edición rápida — secretaria/admin */}
       {editDocId && (() => {
-        const editDoc = docs.find(d => d.id === editDocId)
+        const editDoc = (docs ?? []).find(d => d.id === editDocId)
         if (!editDoc) return null
         return <ModalEditarRegistro doc={editDoc} onClose={() => setEditDocId(null)} onSaved={() => { setEditDocId(null); refetch() }} />
       })()}

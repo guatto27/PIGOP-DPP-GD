@@ -101,7 +101,6 @@ export default function Home() {
   const isDirector = user?.rol === 'admin_cliente'
   const isSecretaria = user?.rol === 'secretaria'
   const isSuperadmin = user?.rol === 'superadmin'
-  const isAnalista = user?.rol === 'analista'
   const canBypass = isSuperadmin || isDirector
 
   // Módulos accesibles para este usuario
