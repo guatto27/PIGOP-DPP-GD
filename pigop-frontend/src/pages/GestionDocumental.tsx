@@ -7,6 +7,7 @@ import {
   ArrowRight, InboxIcon, SendIcon, Building2,
   Download, Shield, BookOpen, FileSignature,
   History, CornerUpLeft, RefreshCw, Lock, Hash, Mail, ChevronLeft,
+  ClipboardCheck, ArrowLeftRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -1172,6 +1173,8 @@ function PanelRecibido({
   const [showFirmaModal, setShowFirmaModal] = useState(false)
   const [enviandoFirma, setEnviandoFirma] = useState(false)
   const [enviadoFirmaOk, setEnviadoFirmaOk] = useState(false)
+  const [fechaAcuse, setFechaAcuse] = useState('')
+  const [subiendoAcuse, setSubiendoAcuse] = useState(false)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [originalUrl, setOriginalUrl] = useState<string | null>(null)
@@ -1204,13 +1207,17 @@ function PanelRecibido({
   const isSecretaria = user?.rol === 'secretaria'
   const isAsesor = user?.rol === 'asesor'
   const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
+  const isSubdirector = user?.rol === 'subdirector'
+  const isJefeDepto = user?.rol === 'jefe_depto'
+  const isAuditor = user?.rol === 'auditor'
+  const isReadOnly = isAuditor
   const canTurnar = isDirector || isSecretaria || isSuperadmin
+  const canReasignar = canTurnar || isSubdirector || isJefeDepto  // Áreas pueden redirigir
   const canGenerarRespuesta = isArea || isAsesor || isDirector || isSuperadmin
   const canFirmar = isDirector || isSuperadmin
-  const canEnviarParaFirma = isArea || isAsesor || isSuperadmin
-  const canDescargarDocx = isDirector || isSuperadmin  // Solo Director y Admin descargan DOCX
-  const canEliminar = isSecretaria || isSuperadmin  // Secretaria y Admin eliminan registros
-  // canReasignar e isReadOnly reservados para uso futuro
+  const canEnviarParaFirma = isArea || isAsesor || isSecretaria || isSuperadmin
+  const canDescargarDocx = isDirector || isSuperadmin
+  const canEliminar = isSecretaria || isSuperadmin
 
   // Auto-cargar original al montar
   useEffect(() => {
@@ -1644,12 +1651,12 @@ function PanelRecibido({
                     <p className="text-[10px] font-medium text-green-700 flex items-center gap-1">
                       <CheckCircle2 size={10} /> Turno confirmado
                     </p>
-                    {canTurnar && (
+                    {canReasignar && (
                       <button
                         onClick={() => setCambiarTurnoOpen(prev => !prev)}
                         className="text-[10px] text-amber-600 hover:text-amber-800 font-medium flex items-center gap-0.5"
                       >
-                        <RefreshCw size={9} /> Cambiar
+                        <ArrowLeftRight size={9} /> Redirigir a otra área
                       </button>
                     )}
                   </div>
@@ -1661,7 +1668,7 @@ function PanelRecibido({
                     </div>
                   )}
                   {/* Formulario cambio de turno */}
-                  {cambiarTurnoOpen && canTurnar && (
+                  {cambiarTurnoOpen && canReasignar && (
                     <div className="mt-2 pt-2 border-t border-green-200 space-y-2">
                       <p className="text-[10px] font-medium text-amber-700">Reasignar a otra área:</p>
                       <select
@@ -2377,6 +2384,80 @@ function PanelRecibido({
                   <Eye size={12} /> Ver documento
                 </button>
               </div>
+
+              {/* ── Acuse de recibido (solo secretaria/admin) ── */}
+              {(isSecretaria || isSuperadmin) && (
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+                  <div className="flex items-center gap-2">
+                    <ClipboardCheck size={13} className="text-blue-600" />
+                    <span className="text-[10px] font-semibold text-blue-800 uppercase tracking-wide">Acuse de recibido</span>
+                  </div>
+                  {doc.acuse_recibido_url ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-blue-100">
+                        <FileText size={11} className="text-blue-500" />
+                        <span className="text-[10px] text-blue-700 flex-1 truncate">{doc.acuse_recibido_nombre}</span>
+                        {doc.acuse_recibido_fecha && <span className="text-[9px] text-blue-500">{doc.acuse_recibido_fecha}</span>}
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button onClick={async () => {
+                          const url = await documentosApi.obtenerAcuseRecibidoUrl(doc.id)
+                          window.open(url, '_blank')
+                        }} className="flex-1 flex items-center justify-center gap-1 py-1 text-[10px] rounded border border-blue-200 text-blue-700 hover:bg-blue-100">
+                          <Eye size={10} /> Ver acuse
+                        </button>
+                        <button onClick={async () => {
+                          if (!window.confirm('¿Eliminar acuse de recibido?')) return
+                          await documentosApi.eliminarAcuseRecibido(doc.id)
+                          invalidate()
+                        }} className="flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-red-200 text-red-600 hover:bg-red-50">
+                          <X size={10} /> Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <p className="text-[9px] text-blue-600">Suba el escaneo del oficio con sello de acuse de la dependencia destino</p>
+                      <div className="flex gap-1.5">
+                        <input type="text" placeholder="Fecha del acuse" value={fechaAcuse}
+                          onChange={e => setFechaAcuse(e.target.value)}
+                          className="flex-1 px-2 py-1 text-[10px] rounded border border-blue-200 focus:ring-1 focus:ring-blue-400" />
+                      </div>
+                      <label className="flex items-center justify-center gap-1.5 py-2 text-[10px] rounded-lg font-medium border-2 border-dashed border-blue-300 text-blue-700 hover:bg-blue-100 cursor-pointer transition-colors">
+                        <Upload size={11} /> Subir escaneo de acuse (PDF/imagen)
+                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={async (e) => {
+                          const f = e.target.files?.[0]
+                          if (!f) return
+                          try {
+                            setSubiendoAcuse(true)
+                            await documentosApi.subirAcuseRecibido(doc.id, f, fechaAcuse)
+                            setFechaAcuse('')
+                            invalidate()
+                          } catch (err) { window.alert('Error al subir acuse: ' + ((err as any)?.response?.data?.detail || 'Intente de nuevo'))
+                          } finally { setSubiendoAcuse(false) }
+                        }} />
+                      </label>
+                      {subiendoAcuse && (
+                        <div className="flex items-center justify-center gap-1.5 py-1 text-[10px] text-blue-600">
+                          <RotateCcw size={10} className="animate-spin" /> Subiendo acuse...
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Acuse visible para todos (solo lectura) */}
+              {!(isSecretaria || isSuperadmin) && doc.acuse_recibido_url && (
+                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
+                  <ClipboardCheck size={12} className="text-blue-600" />
+                  <span className="text-[10px] text-blue-700 flex-1">Acuse de recibido registrado</span>
+                  <button onClick={async () => {
+                    const url = await documentosApi.obtenerAcuseRecibidoUrl(doc.id)
+                    window.open(url, '_blank')
+                  }} className="text-[10px] text-blue-600 underline hover:text-blue-800">Ver</button>
+                </div>
+              )}
             </div>
           ) : doc.estado === 'devuelto' ? (
             <div className="flex items-center gap-2 py-2 px-3 bg-red-50 border border-red-200 rounded-lg">

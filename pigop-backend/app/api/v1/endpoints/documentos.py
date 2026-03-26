@@ -852,8 +852,8 @@ async def cambiar_turno(
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(get_current_active_user),
 ):
-    """Secretaría, Director o superadmin pueden re-turnar un documento ya asignado."""
-    if current_user.rol in ("consulta", "analista"):
+    """Secretaría, Director, Subdirector, Jefe de Depto o superadmin pueden re-turnar."""
+    if current_user.rol in ("consulta", "auditor"):
         raise ForbiddenError("No tienes permisos para cambiar el turno.")
 
     doc = await crud_documento.get(db, doc_id)
