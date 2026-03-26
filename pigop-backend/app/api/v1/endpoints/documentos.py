@@ -2160,3 +2160,92 @@ async def eliminar_documento(
     _assert_acceso(current_user, str(doc.cliente_id))
     await crud_documento.delete(db, id=doc_id)
     return {"message": "Documento eliminado correctamente.", "success": True}
+
+
+# ---------- Acuse de recibido (secretaria sube escaneo con sello) -----------
+
+@router.post(
+    "/{doc_id}/acuse-recibido",
+    response_model=DocumentoResponse,
+    summary="Subir acuse de recibido (escaneo con sello)",
+)
+async def subir_acuse_recibido(
+    doc_id: str,
+    fecha_acuse: str = Form(""),
+    archivo: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """Secretaria sube el escaneo del oficio con sello de acuse de la dependencia destino."""
+    if current_user.rol not in ("secretaria", "superadmin"):
+        raise ForbiddenError("Solo Secretaría puede registrar acuses de recibido.")
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+    _assert_acceso(current_user, str(doc.cliente_id))
+    if not doc.firmado_digitalmente:
+        raise BusinessError("Solo documentos firmados pueden recibir acuse.")
+
+    upload_dir = os.path.join("uploads", "acuses")
+    os.makedirs(upload_dir, exist_ok=True)
+    ext = os.path.splitext(archivo.filename or "acuse.pdf")[1]
+    filename = f"acuse_{doc_id}{ext}"
+    filepath = os.path.join(upload_dir, filename)
+    content = await archivo.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    from datetime import datetime as dt
+    update_data = {
+        "acuse_recibido_url": filepath,
+        "acuse_recibido_nombre": archivo.filename,
+        "acuse_recibido_fecha": fecha_acuse or None,
+        "acuse_registrado_en": dt.now(),
+        "acuse_registrado_por_id": str(current_user.id),
+        "despachado": True,
+        "despachado_por_id": str(current_user.id),
+        "despachado_en": dt.now(),
+    }
+    updated = await crud_documento.update(db, db_obj=doc, obj_in=update_data)
+    return await crud_documento.get_with_relations(db, updated.id)
+
+
+@router.delete(
+    "/{doc_id}/acuse-recibido",
+    response_model=DocumentoResponse,
+    summary="Eliminar acuse de recibido",
+)
+async def eliminar_acuse_recibido(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    if current_user.rol not in ("secretaria", "superadmin"):
+        raise ForbiddenError("Solo Secretaría puede eliminar acuses.")
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+    _assert_acceso(current_user, str(doc.cliente_id))
+    if doc.acuse_recibido_url and os.path.exists(doc.acuse_recibido_url):
+        os.remove(doc.acuse_recibido_url)
+    updated = await crud_documento.update(db, db_obj=doc, obj_in={
+        "acuse_recibido_url": None, "acuse_recibido_nombre": None,
+        "acuse_recibido_fecha": None, "acuse_registrado_en": None,
+        "acuse_registrado_por_id": None,
+    })
+    return await crud_documento.get_with_relations(db, updated.id)
+
+
+@router.get("/{doc_id}/acuse-recibido/archivo", summary="Descargar acuse de recibido")
+async def descargar_acuse_recibido(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+    _assert_acceso(current_user, str(doc.cliente_id))
+    if not doc.acuse_recibido_url or not os.path.exists(doc.acuse_recibido_url):
+        raise NotFoundError("No hay acuse de recibido registrado.")
+    return FileResponse(doc.acuse_recibido_url, filename=doc.acuse_recibido_nombre or "acuse.pdf")

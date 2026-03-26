@@ -143,6 +143,9 @@ class DocumentoListResponse(BaseModel):
     firmado_digitalmente: Optional[bool] = None
     requiere_respuesta: bool = True
     despachado:       Optional[bool] = False
+    acuse_recibido_url:    Optional[str] = None
+    acuse_recibido_nombre: Optional[str] = None
+    acuse_recibido_fecha:  Optional[str] = None
     has_borrador:     bool = False
     tags:             Optional[List[str]]
     creado_en:        datetime

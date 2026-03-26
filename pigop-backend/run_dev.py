@@ -106,6 +106,12 @@ _NUEVAS_COLUMNAS_DOC = [
     "ALTER TABLE documentos_oficiales ADD COLUMN despachado INTEGER DEFAULT 0",
     "ALTER TABLE documentos_oficiales ADD COLUMN despachado_por_id VARCHAR(36)",
     "ALTER TABLE documentos_oficiales ADD COLUMN despachado_en DATETIME",
+    # ── Acuse de recibido ──
+    "ALTER TABLE documentos_oficiales ADD COLUMN acuse_recibido_url VARCHAR(500)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN acuse_recibido_nombre VARCHAR(200)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN acuse_recibido_fecha VARCHAR(100)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN acuse_registrado_en DATETIME",
+    "ALTER TABLE documentos_oficiales ADD COLUMN acuse_registrado_por_id VARCHAR(36)",
 ]
 with sync_engine.connect() as _mc:
     for _stmt in _NUEVAS_COLUMNAS_DOC:

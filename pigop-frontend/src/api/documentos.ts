@@ -64,6 +64,9 @@ export interface DocumentoListItem {
   firmado_digitalmente: boolean | null
   requiere_respuesta: boolean
   despachado:       boolean
+  acuse_recibido_url:    string | null
+  acuse_recibido_nombre: string | null
+  acuse_recibido_fecha:  string | null
   has_borrador:     boolean
   creado_en:        string
 }
@@ -470,6 +473,25 @@ export const documentosApi = {
   eliminarTablaImagen: async (id: string): Promise<Documento> => {
     const res = await apiClient.delete(`/documentos/${id}/tabla-imagen`)
     return res.data
+  },
+
+  // ── Acuse de recibido ──
+  subirAcuseRecibido: async (id: string, archivo: File, fechaAcuse?: string): Promise<Documento> => {
+    const form = new FormData()
+    form.append('archivo', archivo)
+    if (fechaAcuse) form.append('fecha_acuse', fechaAcuse)
+    const res = await apiClient.post(`/documentos/${id}/acuse-recibido`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data
+  },
+  eliminarAcuseRecibido: async (id: string): Promise<Documento> => {
+    const res = await apiClient.delete(`/documentos/${id}/acuse-recibido`)
+    return res.data
+  },
+  obtenerAcuseRecibidoUrl: async (id: string): Promise<string> => {
+    const res = await apiClient.get(`/documentos/${id}/acuse-recibido/archivo`, { responseType: 'blob' })
+    return URL.createObjectURL(res.data)
   },
 
   procesarOCR: async (id: string, file: File): Promise<OCRResult> => {

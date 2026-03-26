@@ -155,6 +155,13 @@ class DocumentoOficial(Base):
     despachado_por_id = Column(String(36), ForeignKey("usuarios.id"), nullable=True)
     despachado_en    = Column(DateTime(timezone=True), nullable=True)
 
+    # ── Acuse de recibido (secretaria sube escaneo con sello) ──────────────────
+    acuse_recibido_url     = Column(String(500), nullable=True)
+    acuse_recibido_nombre  = Column(String(200), nullable=True)
+    acuse_recibido_fecha   = Column(String(100), nullable=True)  # Fecha del acuse (texto)
+    acuse_registrado_en    = Column(DateTime(timezone=True), nullable=True)
+    acuse_registrado_por_id = Column(String(36), ForeignKey("usuarios.id"), nullable=True)
+
     # ── Vinculación con otros módulos ─────────────────────────────────────────
     certificacion_id = Column(String(36), nullable=True)   # FK futuro a Certificaciones
     # Estado sincronizado desde módulo externo (certificaciones, minutas, etc.)

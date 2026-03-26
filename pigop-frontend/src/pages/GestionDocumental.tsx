@@ -1170,6 +1170,8 @@ function PanelRecibido({
   const [firmaError, setFirmaError] = useState('')
   const [firmaSuccess, setFirmaSuccess] = useState(false)
   const [showFirmaModal, setShowFirmaModal] = useState(false)
+  const [enviandoFirma, setEnviandoFirma] = useState(false)
+  const [enviadoFirmaOk, setEnviadoFirmaOk] = useState(false)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [originalUrl, setOriginalUrl] = useState<string | null>(null)
@@ -2153,17 +2155,31 @@ function PanelRecibido({
                   ) : canEnviarParaFirma ? (
                     <button onClick={async () => {
                       try {
+                        setEnviandoFirma(true)
                         await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
+                        setEnviadoFirmaOk(true)
+                        setTimeout(() => setEnviadoFirmaOk(false), 4000)
                         invalidate()
-                      } catch (e) { window.alert('Error al enviar para firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+                      } catch (e) { window.alert('Error al enviar para firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
+                      } finally { setEnviandoFirma(false) }
                     }}
-                      disabled={doc.estado === 'respondido'}
+                      disabled={doc.estado === 'respondido' || enviandoFirma}
                       className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg font-medium text-white transition-colors disabled:opacity-50"
                       style={{ backgroundColor: GUINDA }}>
-                      <Send size={12} /> Enviar para firma del Director
+                      {enviandoFirma
+                        ? <><RotateCcw size={12} className="animate-spin" /> Enviando...</>
+                        : <><Send size={12} /> Enviar para firma del Director</>}
                     </button>
 
                   ) : null}
+
+                  {/* Toast confirmación de envío a firma */}
+                  {enviadoFirmaOk && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg animate-pulse">
+                      <CheckCircle2 size={14} className="text-emerald-600" />
+                      <span className="text-xs font-medium text-emerald-700">Oficio enviado para firma del Director</span>
+                    </div>
+                  )}
                 </div>
               </>
             )}
