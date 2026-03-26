@@ -54,8 +54,10 @@ class DocumentoOficial(Base):
     remitente_dependencia = Column(String(200), nullable=True)
 
     # ── Destinatario / dependencias (para emitidos) ───────────────────────────
-    dependencia_origen  = Column(String(200), nullable=True)
-    dependencia_destino = Column(String(200), nullable=True)
+    dependencia_origen    = Column(String(200), nullable=True)
+    dependencia_destino   = Column(String(200), nullable=True)
+    destinatario_nombre   = Column(String(200), nullable=True)  # Nombre completo del destinatario
+    destinatario_cargo    = Column(String(200), nullable=True)  # Cargo del destinatario
 
     # ── Fechas ────────────────────────────────────────────────────────────────
     fecha_documento = Column(String(10), nullable=True)   # YYYY-MM-DD (fecha del doc)

@@ -359,8 +359,19 @@ class OficioGeneratorService:
         self, doc: Document,
         nombre: str, cargo: str, dependencia: str,
     ) -> None:
-        """Bloque de destinatario."""
-        for text in [f"C. {nombre.upper()}", cargo.upper(), dependencia.upper() + ".", "PRESENTE."]:
+        """Bloque de destinatario. Solo incluye líneas con contenido real."""
+        lines = []
+        if nombre and nombre.strip() not in ("", "---"):
+            lines.append(nombre.upper())
+        if cargo and cargo.strip() not in ("", "---"):
+            lines.append(cargo.upper())
+        if dependencia and dependencia.strip() not in ("", "---"):
+            dep = dependencia.upper()
+            if not dep.endswith('.'):
+                dep += '.'
+            lines.append(dep)
+        lines.append("PRESENTE.")
+        for text in lines:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             p.paragraph_format.space_after = Pt(0)

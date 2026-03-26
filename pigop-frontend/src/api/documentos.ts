@@ -40,9 +40,12 @@ export interface DocumentoListItem {
   tipo: TipoDocumento
   asunto: string
   remitente_nombre:      string | null
+  remitente_cargo:       string | null
   remitente_dependencia: string | null
   dependencia_origen:    string | null
   dependencia_destino:   string | null
+  destinatario_nombre:   string | null
+  destinatario_cargo:    string | null
   fecha_documento:  string | null
   fecha_recibido:   string | null
   fecha_limite:     string | null
@@ -140,6 +143,8 @@ export interface DocumentoEmitidoCreate {
   numero_control?:    string
   dependencia_origen?:  string
   dependencia_destino?: string
+  destinatario_nombre?: string
+  destinatario_cargo?:  string
   fecha_documento?:   string
   estado?:            EstadoEmitido
   descripcion?:       string
@@ -161,6 +166,8 @@ export interface DocumentoUpdate {
   remitente_dependencia?: string
   dependencia_origen?:  string
   dependencia_destino?: string
+  destinatario_nombre?: string
+  destinatario_cargo?:  string
   fecha_documento?:    string
   fecha_recibido?:     string
   prioridad?:          Prioridad

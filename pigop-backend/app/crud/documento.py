@@ -236,12 +236,13 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
         db_obj: DocumentoOficial,
         observaciones: str,
         devuelto_por_id: str,
+        estado_destino: str = "devuelto",
     ) -> DocumentoOficial:
-        """Transiciona documento a 'devuelto' con observaciones obligatorias."""
+        """Transiciona documento a 'devuelto' (o 'borrador' para emitidos) con observaciones obligatorias."""
         estado_anterior = db_obj.estado
 
         upd = {
-            "estado": "devuelto",
+            "estado": estado_destino,
             "devuelto_por_id": devuelto_por_id,
             "devuelto_en": datetime.now(timezone.utc),
             "motivo_devolucion": observaciones,
@@ -254,7 +255,7 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
             usuario_id=devuelto_por_id,
             tipo_accion="devolucion",
             estado_anterior=estado_anterior,
-            estado_nuevo="devuelto",
+            estado_nuevo=estado_destino,
             observaciones=observaciones,
             version=db_obj.version or 1,
             borrador_snapshot=db_obj.borrador_respuesta,

@@ -55,6 +55,8 @@ class DocumentoEmitidoCreate(BaseModel):
     numero_control:     Optional[str] = Field(None, max_length=100)
     dependencia_origen:  Optional[str] = Field(None, max_length=200)
     dependencia_destino: Optional[str] = Field(None, max_length=200)
+    destinatario_nombre: Optional[str] = Field(None, max_length=200)
+    destinatario_cargo:  Optional[str] = Field(None, max_length=200)
     fecha_documento: Optional[str] = None
     estado:          Optional[str] = Field("borrador")
     descripcion:     Optional[str] = None
@@ -77,6 +79,8 @@ class DocumentoUpdate(BaseModel):
     remitente_dependencia: Optional[str] = Field(None, max_length=200)
     dependencia_origen:  Optional[str] = Field(None, max_length=200)
     dependencia_destino: Optional[str] = Field(None, max_length=200)
+    destinatario_nombre: Optional[str] = Field(None, max_length=200)
+    destinatario_cargo:  Optional[str] = Field(None, max_length=200)
     fecha_documento:    Optional[str] = None
     fecha_recibido:     Optional[str] = None
     fecha_limite:       Optional[str] = None
@@ -116,9 +120,12 @@ class DocumentoListResponse(BaseModel):
     tipo: str
     asunto: str
     remitente_nombre:      Optional[str]
+    remitente_cargo:       Optional[str] = None
     remitente_dependencia: Optional[str]
     dependencia_origen:    Optional[str]
     dependencia_destino:   Optional[str]
+    destinatario_nombre:   Optional[str] = None
+    destinatario_cargo:    Optional[str] = None
     fecha_documento:  Optional[str]
     fecha_recibido:   Optional[str]
     fecha_limite:     Optional[str]

@@ -556,6 +556,24 @@ async def actualizar_documento(
 
 # ---------- Cambiar estado ---------------------------------------------------
 
+# Mapa de transiciones válidas por flujo
+TRANSICIONES_RECIBIDO = {
+    "recibido": ["turnado"],
+    "turnado": ["en_atencion"],
+    "en_atencion": ["respondido", "de_conocimiento"],
+    "respondido": ["firmado"],
+    "firmado": ["archivado"],
+    "de_conocimiento": ["archivado"],
+    "devuelto": ["en_atencion"],
+}
+
+TRANSICIONES_EMITIDO = {
+    "borrador": ["en_revision"],
+    "en_revision": ["vigente", "borrador"],
+    "vigente": ["archivado"],
+}
+
+
 @router.post("/{doc_id}/estado", response_model=DocumentoResponse, summary="Cambiar estado")
 async def cambiar_estado(
     doc_id: str,
@@ -578,6 +596,16 @@ async def cambiar_estado(
             "No puede marcarse como 'De conocimiento'. "
             "Debe atenderse: En atención → Respondido → Firmado."
         )
+
+    # Validar transición de estado (superadmin puede hacer cualquier transición)
+    if current_user.rol != "superadmin":
+        mapa = TRANSICIONES_RECIBIDO if doc.flujo == "recibido" else TRANSICIONES_EMITIDO
+        destinos_permitidos = mapa.get(doc.estado, [])
+        if nuevo_estado not in destinos_permitidos:
+            raise BusinessError(
+                f"Transición no permitida: '{doc.estado}' → '{nuevo_estado}'. "
+                f"Transiciones válidas desde '{doc.estado}': {', '.join(destinos_permitidos) or 'ninguna'}."
+            )
 
     updated = await crud_documento.update(db, db_obj=doc, obj_in={"estado": nuevo_estado})
     return await crud_documento.get_with_relations(db, updated.id)
@@ -1420,14 +1448,14 @@ async def descargar_oficio(
 
     # --- Determinar destinatario según flujo ---
     if doc.flujo == "emitido":
-        # Evitar duplicación: si solo hay dependencia_destino, usarla como dependencia
-        # y dejar nombre/cargo vacíos en lugar de repetir el mismo valor
-        datos_ia = doc.datos_extraidos_ia or {}
-        dest_nombre = datos_ia.get("destinatario_nombre") or doc.dependencia_destino or "---"
-        dest_cargo = datos_ia.get("destinatario_cargo") or ""
-        dest_dep = doc.dependencia_destino or ""
-        # Si nombre es igual a dependencia, limpiar para no duplicar
-        if dest_nombre == dest_dep:
+        if doc.destinatario_nombre:
+            dest_nombre = doc.destinatario_nombre
+            dest_cargo = doc.destinatario_cargo or ""
+            dest_dep = doc.dependencia_destino or ""
+        else:
+            # Legacy: solo dependencia_destino → ponerlo como nombre, sin duplicar
+            dest_nombre = doc.dependencia_destino or "---"
+            dest_cargo = ""
             dest_dep = ""
     else:
         dest_nombre = doc.remitente_nombre or "---"
@@ -1532,7 +1560,8 @@ async def devolver_documento(
     """
     Director devuelve un documento al área responsable para correcciones.
     Solo admin_cliente o superadmin.
-    Transición: en_atencion → devuelto
+    Transición: en_atencion/respondido → devuelto (recibidos)
+                en_revision → borrador (emitidos)
     """
     if current_user.rol not in ("admin_cliente", "superadmin"):
         raise ForbiddenError("Solo admin o superadmin pueden devolver documentos.")
@@ -1542,9 +1571,43 @@ async def devolver_documento(
         raise NotFoundError("Documento no encontrado.")
     _assert_acceso(current_user, str(doc.cliente_id))
 
+    # Emitidos en revisión: devolver a borrador con motivo
+    if doc.flujo == "emitido" and doc.estado == "en_revision":
+        if not doc.borrador_respuesta and not doc.url_storage:
+            raise BusinessError(
+                "No hay contenido que devolver. El documento emitido no tiene "
+                "borrador ni archivo adjunto."
+            )
+        doc = await crud_documento.devolver_documento(
+            db,
+            db_obj=doc,
+            observaciones=data.observaciones,
+            devuelto_por_id=str(current_user.id),
+            estado_destino="borrador",
+        )
+        historial = await crud_documento.get_historial(db, doc.id)
+        entry = historial[0] if historial else None
+        return DevolucionResponse(
+            documento_id=doc.id,
+            estado="borrador",
+            historial_entry=HistorialItemResponse(
+                id=entry.id if entry else "",
+                tipo_accion=entry.tipo_accion if entry else "devolucion",
+                estado_anterior=entry.estado_anterior if entry else None,
+                estado_nuevo=entry.estado_nuevo if entry else None,
+                observaciones=entry.observaciones if entry else data.observaciones,
+                version=entry.version if entry else 1,
+                timestamp=entry.timestamp if entry else "",
+                usuario_nombre=(
+                    entry.usuario.nombre_completo if entry and entry.usuario else None
+                ),
+            ) if entry else None,
+            message="Documento emitido devuelto a borrador.",
+        )
+
     if doc.estado not in ("en_atencion", "respondido"):
         raise BusinessError(
-            f"Solo documentos 'en_atencion' o 'respondido' pueden devolverse. Estado actual: {doc.estado}"
+            f"Solo documentos 'en_atencion', 'respondido' o 'en_revision' (emitidos) pueden devolverse. Estado actual: {doc.estado}"
         )
     if not doc.borrador_respuesta:
         raise BusinessError("No hay borrador que devolver. El documento no tiene respuesta generada.")
@@ -1979,9 +2042,16 @@ async def descargar_oficio_pdf(
 
     # --- Determinar destinatario según flujo ---
     if doc.flujo == "emitido":
-        pdf_dest_nombre = doc.dependencia_destino or "---"
-        pdf_dest_cargo = "---"
-        pdf_dest_dep = doc.dependencia_destino or "---"
+        if doc.destinatario_nombre:
+            # Tiene nombre separado → usar nombre/cargo/dependencia
+            pdf_dest_nombre = doc.destinatario_nombre
+            pdf_dest_cargo = doc.destinatario_cargo or ""
+            pdf_dest_dep = doc.dependencia_destino or ""
+        else:
+            # Solo tiene dependencia_destino (legacy) → ponerlo como nombre, sin duplicar
+            pdf_dest_nombre = doc.dependencia_destino or "---"
+            pdf_dest_cargo = ""
+            pdf_dest_dep = ""
     else:
         pdf_dest_nombre = doc.remitente_nombre or "---"
         pdf_dest_cargo = doc.remitente_cargo or "---"

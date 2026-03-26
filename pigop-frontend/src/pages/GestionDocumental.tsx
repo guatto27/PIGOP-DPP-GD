@@ -96,7 +96,7 @@ function PrioridadBadge({ prioridad }: { prioridad: Prioridad }) {
 
 // ── Visor flotante de documentos (Punto 7) ────────────────────────────────────
 function VisorFlotante({ url, titulo, onClose, onDownload, firmado }: {
-  url: string; titulo: string; onClose: () => void; onDownload?: () => void; firmado?: boolean
+  url: string; titulo: string; onClose: () => void; onDownload?: () => void; firmado?: boolean | null
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -836,6 +836,8 @@ function ModalNuevoEmitido({
     numero_control: '',
     dependencia_origen: 'Dirección de Programación y Presupuesto',
     dependencia_destino: '',
+    destinatario_nombre: '',
+    destinatario_cargo: '',
     fecha_documento: new Date().toISOString().slice(0, 10),
     estado: 'borrador',
     referencia_elaboro: '',
@@ -1083,11 +1085,28 @@ function ModalNuevoEmitido({
                 placeholder="Asunto del oficio"
                 value={form.asunto} onChange={e => set('asunto', e.target.value)} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Destinatario</label>
-              <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                placeholder="Dependencia o persona destino"
-                value={form.dependencia_destino ?? ''} onChange={e => set('dependencia_destino', e.target.value)} />
+            {/* ── Destinatario (3 campos) ── */}
+            <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+              <p className="text-xs font-medium text-gray-600 mb-1">Destinatario</p>
+              <div>
+                <label className="block text-[10px] text-gray-500 mb-1">Nombre completo</label>
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+                  placeholder="C.P. Leticia Gálvez"
+                  value={form.destinatario_nombre ?? ''} onChange={e => set('destinatario_nombre', e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-[10px] text-gray-500 mb-1">Cargo</label>
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+                  placeholder="Delegada Administrativa"
+                  value={form.destinatario_cargo ?? ''} onChange={e => set('destinatario_cargo', e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-[10px] text-gray-500 mb-1">Dependencia / Entidad</label>
+                <input className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm"
+                  placeholder="Secretaría de Finanzas y Administración"
+                  value={form.dependencia_destino ?? ''} onChange={e => set('dependencia_destino', e.target.value)} />
+              </div>
+              <p className="text-[9px] text-gray-400">En el oficio aparecerá: Nombre → Cargo → Dependencia → PRESENTE.</p>
             </div>
 
             {/* Referencia interna MAFM/elaboro/reviso */}
@@ -1211,6 +1230,8 @@ function PanelRecibido({
   const [instruccionesTurno, setInstruccionesTurno] = useState('')
   const [cambiarTurnoOpen, setCambiarTurnoOpen] = useState(false)
   const [instruccionesCambioTurno, setInstruccionesCambioTurno] = useState('')
+  const [areaSelectValue, setAreaSelectValue] = useState(doc.sugerencia_area_codigo ?? '')
+  const [cambioAreaSelectValue, setCambioAreaSelectValue] = useState('')
   const turnarMutation = useMutation({
     mutationFn: ({ cod, nom }: { cod: string; nom: string }) =>
       documentosApi.confirmarTurno(doc.id, cod, nom, instruccionesTurno || undefined),
@@ -1240,27 +1261,27 @@ function PanelRecibido({
   const handleOCR = async (file: File) => {
     setProcesando(true)
     try { await documentosApi.procesarOCR(doc.id, file); invalidate() }
-    catch { /* error handled */ }
+    catch (e) { window.alert('Error al procesar OCR: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setProcesando(false) }
   }
 
   const handleBorrador = async (instrucciones?: string) => {
     setGenerando(true)
     try { await documentosApi.generarBorrador(doc.id, instrucciones || instruccionesIA || undefined); invalidate() }
-    catch { /* error */ }
+    catch (e) { window.alert('Error al generar borrador: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setGenerando(false) }
   }
 
   const handleCargarReferencia = async (file: File) => {
     setCargandoReferencia(true)
     try { await documentosApi.cargarReferencia(doc.id, file); invalidate() }
-    catch { /* error */ }
+    catch (e) { window.alert('Error al cargar referencia: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setCargandoReferencia(false) }
   }
 
   const handleEliminarReferencia = async () => {
     try { await documentosApi.eliminarReferencia(doc.id); invalidate() }
-    catch { /* error */ }
+    catch (e) { window.alert('Error al eliminar referencia: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
   }
 
   // handleOficioEstructurado eliminado — unificado en handleBorrador
@@ -1268,7 +1289,7 @@ function PanelRecibido({
   const handleDescargarOficio = async () => {
     setDescargando(true)
     try { await documentosApi.descargarOficio(doc.id) }
-    catch { /* error */ }
+    catch (e) { window.alert('Error al descargar oficio: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setDescargando(false) }
   }
 
@@ -1315,7 +1336,7 @@ function PanelRecibido({
       setShowDevolucionForm(false)
       setShowDevolucionModal(false)
       setObservacionesDevolucion('')
-    } catch { /* error */ }
+    } catch (e) { window.alert('Error al devolver documento: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setDevolviendo(false) }
   }
 
@@ -1324,7 +1345,7 @@ function PanelRecibido({
     try {
       await documentosApi.reenviarDocumento(doc.id, 'Documento corregido y reenviado para revisión.')
       invalidate()
-    } catch { /* error */ }
+    } catch (e) { window.alert('Error al reenviar documento: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setReenviando(false) }
   }
 
@@ -1341,7 +1362,7 @@ function PanelRecibido({
     if (field === 'fecha') data.fecha_respuesta = value
     if (field === 'elaboro') data.referencia_elaboro = value
     if (field === 'reviso') data.referencia_reviso = value
-    try { await documentosApi.update(doc.id, data); invalidate() } catch { /* */ }
+    try { await documentosApi.update(doc.id, data); invalidate() } catch (e) { window.alert('Error al guardar: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
   }
 
   // const areaActual = doc.area_turno || doc.sugerencia_area_codigo || ''  // reserved for future use
@@ -1643,8 +1664,8 @@ function PanelRecibido({
                       <p className="text-[10px] font-medium text-amber-700">Reasignar a otra área:</p>
                       <select
                         className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-xs"
-                        id="cambio-area-select"
-                        defaultValue=""
+                        value={cambioAreaSelectValue}
+                        onChange={e => setCambioAreaSelectValue(e.target.value)}
                       >
                         <option value="">— Seleccionar nueva área —</option>
                         {areas.map(a => (
@@ -1660,8 +1681,7 @@ function PanelRecibido({
                       />
                       <button
                         onClick={() => {
-                          const sel = document.getElementById('cambio-area-select') as HTMLSelectElement
-                          const cod = sel?.value
+                          const cod = cambioAreaSelectValue
                           const area = areas.find(a => a.codigo === cod)
                           if (cod && area) cambiarTurnoMutation.mutate({ cod, nom: area.nombre })
                         }}
@@ -1680,8 +1700,8 @@ function PanelRecibido({
                 <div className="space-y-2">
                   <select
                     className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-xs"
-                    defaultValue={doc.sugerencia_area_codigo ?? ''}
-                    id="area-select"
+                    value={areaSelectValue}
+                    onChange={e => setAreaSelectValue(e.target.value)}
                   >
                     <option value="">— Seleccionar área —</option>
                     {areas.map(a => (
@@ -1700,8 +1720,7 @@ function PanelRecibido({
                   )}
                   <button
                     onClick={() => {
-                      const sel = document.getElementById('area-select') as HTMLSelectElement
-                      const cod = sel?.value
+                      const cod = areaSelectValue
                       const area = areas.find(a => a.codigo === cod)
                       if (cod && area) turnarMutation.mutate({ cod, nom: area.nombre })
                     }}
@@ -2136,7 +2155,7 @@ function PanelRecibido({
                       try {
                         await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
                         invalidate()
-                      } catch { /* error */ }
+                      } catch (e) { window.alert('Error al enviar para firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                     }}
                       disabled={doc.estado === 'respondido'}
                       className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg font-medium text-white transition-colors disabled:opacity-50"
@@ -2359,7 +2378,7 @@ function PanelRecibido({
                   </button>
                 ) : (
                   <button onClick={async () => {
-                    try { await documentosApi.cambiarEstado(doc.id, 'respondido' as never); invalidate() } catch { /* */ }
+                    try { await documentosApi.cambiarEstado(doc.id, 'respondido' as never); invalidate() } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                   }}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
                     style={{ backgroundColor: GUINDA }}>
@@ -2741,7 +2760,8 @@ function PanelEmitido({
   const { user } = useAuth()
   const qc = useQueryClient()
   const fileRefEmitido = useRef<HTMLInputElement>(null)
-  const [tab, setTab] = useState<'datos' | 'borrador' | 'documento'>('datos')
+  const refFileRefEmitido = useRef<HTMLInputElement>(null)
+  const [tab, setTab] = useState<'datos' | 'contenido' | 'documento' | 'historial'>('datos')
   const [editBorrador, setEditBorrador] = useState(false)
   const [borradorText, setBorradorText] = useState(doc.borrador_respuesta ?? '')
   const [generando, setGenerando] = useState(false)
@@ -2758,20 +2778,36 @@ function PanelEmitido({
   const [uploading, setUploading] = useState(false)
   const [aiPrompt, setAiPrompt] = useState('')
   const [editing, setEditing] = useState(false)
+  const [cargandoReferencia, setCargandoReferencia] = useState(false)
+  // Devolución
+  const [showDevolucionModal, setShowDevolucionModal] = useState(false)
+  const [observacionesDevolucion, setObservacionesDevolucion] = useState('')
+  const [devolviendo, setDevolviendo] = useState(false)
+  // Folio / ref fields con auto-save
+  const [folioLocal, setFolioLocal] = useState(doc.folio_respuesta ?? '')
+  const [fechaRespLocal, setFechaRespLocal] = useState(doc.fecha_respuesta ?? '')
+  const [elaboroLocal, setElaboro] = useState(doc.referencia_elaboro ?? '')
+  const [revisoLocal, setReviso] = useState(doc.referencia_reviso ?? '')
   const [editForm, setEditForm] = useState({
     asunto: doc.asunto || '',
     numero_control: doc.numero_control || '',
     dependencia_destino: doc.dependencia_destino || '',
     dependencia_origen: doc.dependencia_origen || '',
     fecha_documento: doc.fecha_documento || '',
-    referencia_elaboro: doc.referencia_elaboro || '',
-    referencia_reviso: doc.referencia_reviso || '',
-    folio_respuesta: doc.folio_respuesta || '',
   })
-  const isDirector = user?.rol === 'admin_cliente' || user?.rol === 'superadmin'
-  const canDescargarDocx = isDirector  // Solo Director y Admin descargan DOCX
-  // const isSecretaria = user?.rol === 'secretaria'  // reserved for future use
-  // const canFirmar = isDirector  // Solo Director firma — reserved for future use
+
+  // ── Roles ──
+  const isDirector = user?.rol === 'admin_cliente'
+  const isSuperadmin = user?.rol === 'superadmin'
+  const isSecretaria = user?.rol === 'secretaria'
+  const isAsesor = user?.rol === 'asesor'
+  const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
+  const canGenerar = isSecretaria || isAsesor || isArea || isDirector || isSuperadmin
+  const canFirmar = isDirector || isSuperadmin
+  const canEnviarParaFirma = isSecretaria || isAsesor || isArea || isSuperadmin
+  const canDescargarDocx = isDirector || isSuperadmin
+  const canEliminar = isSecretaria || isSuperadmin
+  const canEditar = doc.estado === 'borrador' || (doc.estado === 'en_revision' && canFirmar)
 
   // Auto-cargar original al montar
   useEffect(() => {
@@ -2800,13 +2836,22 @@ function PanelEmitido({
     onSuccess: () => { invalidate(); setEditing(false) },
   })
 
+  const guardarFolioRef = async (field: string, value: string) => {
+    const data: DocumentoUpdate = {}
+    if (field === 'folio') data.folio_respuesta = value
+    if (field === 'fecha') data.fecha_respuesta = value
+    if (field === 'elaboro') data.referencia_elaboro = value
+    if (field === 'reviso') data.referencia_reviso = value
+    try { await documentosApi.update(doc.id, data); invalidate() } catch (e) { window.alert('Error al guardar: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+  }
+
   const handleGenerar = async (instrucciones?: string) => {
     setGenerando(true)
     try {
       await documentosApi.generarBorrador(doc.id, instrucciones || aiPrompt || undefined)
       invalidate()
-      setTab('borrador')
-    } catch { /* error */ }
+      setTab('contenido')
+    } catch (e) { window.alert('Error al generar borrador: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setGenerando(false) }
   }
 
@@ -2815,27 +2860,39 @@ function PanelEmitido({
     try {
       await documentosApi.uploadArchivo(doc.id, file)
       invalidate()
-      // Recargar original
       setLoadingOriginal(true)
       documentosApi.obtenerArchivoOriginalUrl(doc.id)
         .then(url => setOriginalUrl(url))
         .catch(() => {})
         .finally(() => setLoadingOriginal(false))
-    } catch { /* error */ }
+    } catch (e) { window.alert('Error al subir archivo: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setUploading(false) }
+  }
+
+  const handleCargarReferencia = async (file: File) => {
+    setCargandoReferencia(true)
+    try { await documentosApi.cargarReferencia(doc.id, file); invalidate() }
+    catch (e) { window.alert('Error al cargar referencia: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+    finally { setCargandoReferencia(false) }
+  }
+
+  const handleEliminarReferencia = async () => {
+    try { await documentosApi.eliminarReferencia(doc.id); invalidate() }
+    catch (e) { window.alert('Error al eliminar referencia: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
   }
 
   const handleDescargarOficio = async () => {
     setDescargando(true)
     try { await documentosApi.descargarOficio(doc.id) }
-    catch { /* error */ }
+    catch (e) { window.alert('Error al descargar oficio: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
     finally { setDescargando(false) }
   }
 
   const handleFirmar = async () => {
+    if (!firmaPassword.trim()) return
     setFirmando(true); setFirmaError('')
     try {
-      await documentosApi.firmarDocumento(doc.id, firmaPassword)
+      await documentosApi.firmarDocumento(doc.id, firmaPassword.trim())
       invalidate()
       setShowFirmaModal(false)
       setFirmaPassword('')
@@ -2849,10 +2906,31 @@ function PanelEmitido({
     try {
       await documentosApi.cambiarEstado(doc.id, estado as never)
       invalidate()
-    } catch { /* error */ }
+    } catch (e) { window.alert('Error al cambiar estado: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
   }
 
+  const handleDevolver = async () => {
+    if (observacionesDevolucion.trim().length < 10) return
+    setDevolviendo(true)
+    try {
+      await documentosApi.devolverDocumento(doc.id, observacionesDevolucion.trim())
+      invalidate()
+      setShowDevolucionModal(false)
+      setObservacionesDevolucion('')
+    } catch (e) { window.alert('Error al devolver documento: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+    finally { setDevolviendo(false) }
+  }
+
+  // Historial query
+  const { data: historial = [] } = useQuery({
+    queryKey: ['historial-emitido', doc.id],
+    queryFn: () => documentosApi.getHistorial(doc.id),
+    enabled: tab === 'historial',
+  })
+
   const estadoCfg = ESTADO_EMITIDO_CONFIG[doc.estado as keyof typeof ESTADO_EMITIDO_CONFIG]
+  const hasBorrador = !!(doc.borrador_respuesta || doc.url_storage)
+  const tabList: ('datos' | 'contenido' | 'documento' | 'historial')[] = ['datos', 'contenido', ...(doc.borrador_respuesta ? ['documento' as const] : []), 'historial']
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl flex flex-col h-full overflow-hidden">
@@ -2860,10 +2938,8 @@ function PanelEmitido({
       <div className="px-4 py-3 border-b border-gray-100 flex-shrink-0">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <button
-              onClick={onClose}
-              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium px-2 py-1 rounded-lg hover:bg-gray-200 transition-colors flex-shrink-0"
-            >
+            <button onClick={onClose}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 font-medium px-2 py-1 rounded-lg hover:bg-gray-200 transition-colors flex-shrink-0">
               <ChevronLeft size={14} />
               <span className="hidden sm:inline">Volver</span>
             </button>
@@ -2873,13 +2949,13 @@ function PanelEmitido({
             </div>
             <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold text-gray-900 truncate">{doc.asunto}</h3>
-              <p className="text-[10px] text-gray-500 truncate">{doc.numero_control || 'Sin número de control'} · {TIPO_LABELS[doc.tipo]}</p>
+              <p className="text-[10px] text-gray-500 truncate">{doc.numero_control || doc.folio_respuesta || 'Sin folio'} · {TIPO_LABELS[doc.tipo]}</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
         </div>
-        {/* Estado badge + acciones rápidas */}
-        <div className="flex items-center gap-2">
+        {/* Estado badge */}
+        <div className="flex items-center gap-2 flex-wrap">
           {estadoCfg && (
             <span className="text-[10px] px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: estadoCfg.bg, color: estadoCfg.color }}>
               {estadoCfg.label}
@@ -2890,14 +2966,30 @@ function PanelEmitido({
               <Shield size={9} /> Firmado
             </span>
           )}
+          {doc.motivo_devolucion && doc.estado === 'borrador' && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700 flex items-center gap-1">
+              <CornerUpLeft size={9} /> Devuelto
+            </span>
+          )}
         </div>
       </div>
 
+      {/* Banner de devolución */}
+      {doc.motivo_devolucion && doc.estado === 'borrador' && (
+        <div className="mx-4 mt-2 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <AlertTriangle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-[10px] font-semibold text-red-700">Devuelto por el Director</p>
+            <p className="text-[10px] text-red-600 mt-0.5">{doc.motivo_devolucion}</p>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex border-b border-gray-100">
-        {(['datos', 'borrador', ...(doc.borrador_respuesta ? ['documento'] : [])] as const).map(t => (
+        {tabList.map(t => (
           <button key={t} onClick={() => {
-            setTab(t as typeof tab)
+            setTab(t)
             if (t === 'documento' && !pdfUrl && !loadingPdf) {
               setLoadingPdf(true)
               documentosApi.obtenerOficioPdfUrl(doc.id)
@@ -2909,7 +3001,7 @@ function PanelEmitido({
             className={clsx('flex-1 py-2 text-xs font-medium transition-colors',
               tab === t ? 'border-b-2 text-gray-900' : 'text-gray-500 hover:text-gray-700')}
             style={tab === t ? { borderColor: GUINDA, color: GUINDA } : {}}>
-            {t === 'datos' ? 'Datos' : t === 'borrador' ? '✍️ Contenido' : '📄 Documento'}
+            {t === 'datos' ? 'Datos' : t === 'contenido' ? '✍️ Contenido' : t === 'documento' ? '📄 Documento' : '📋 Historial'}
           </button>
         ))}
       </div>
@@ -2923,12 +3015,9 @@ function PanelEmitido({
                 {[
                   ['Asunto', 'asunto'],
                   ['No. Control', 'numero_control'],
-                  ['Folio', 'folio_respuesta'],
                   ['Dependencia destino', 'dependencia_destino'],
                   ['Dependencia origen', 'dependencia_origen'],
                   ['Fecha documento', 'fecha_documento'],
-                  ['Elaboró', 'referencia_elaboro'],
-                  ['Revisó', 'referencia_reviso'],
                 ].map(([label, key]) => (
                   <div key={key}>
                     <label className="text-[10px] font-medium text-gray-500 block mb-1">{label}</label>
@@ -2954,11 +3043,10 @@ function PanelEmitido({
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     ['Tipo', TIPO_LABELS[doc.tipo]],
-                    ['Folio', doc.folio_respuesta],
-                    ['Destinatario', doc.dependencia_destino],
+                    ['Folio', doc.folio_respuesta || doc.numero_control],
                     ['Origen', doc.dependencia_origen],
                     ['Fecha', doc.fecha_documento ? formatDate(doc.fecha_documento) : '—'],
-                    ['Referencia', doc.referencia_elaboro ? `MAFM/${doc.referencia_elaboro}/${doc.referencia_reviso || '?'}` : '—'],
+                    ['Referencia', elaboroLocal ? `MAFM/${elaboroLocal}/${revisoLocal || '?'}` : '—'],
                   ].map(([label, val]) => (
                     <div key={label} className="bg-gray-50 rounded-lg p-2">
                       <p className="text-[10px] text-gray-500">{label}</p>
@@ -2966,29 +3054,98 @@ function PanelEmitido({
                     </div>
                   ))}
                 </div>
+                {/* Bloque destinatario */}
+                <div className="bg-gray-50 rounded-lg p-2">
+                  <p className="text-[10px] text-gray-500 mb-0.5">Destinatario</p>
+                  <p className="text-xs font-medium text-gray-800">{doc.destinatario_nombre || doc.dependencia_destino || '—'}</p>
+                  {doc.destinatario_cargo && <p className="text-[10px] text-gray-600">{doc.destinatario_cargo}</p>}
+                  {doc.dependencia_destino && doc.destinatario_nombre && <p className="text-[10px] text-gray-600">{doc.dependencia_destino}</p>}
+                </div>
                 {doc.descripcion && (
                   <div className="bg-gray-50 rounded-lg p-2">
                     <p className="text-[10px] text-gray-500 mb-1">Descripción</p>
                     <p className="text-xs text-gray-700 leading-relaxed">{doc.descripcion}</p>
                   </div>
                 )}
-                <button onClick={() => setEditing(true)}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
-                  <Edit3 size={12} /> Editar datos
-                </button>
+                {canEditar && (
+                  <button onClick={() => setEditing(true)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
+                    <Edit3 size={12} /> Editar datos
+                  </button>
+                )}
               </>
+            )}
+
+            {/* ── Datos del oficio (Folio, Elaboró, Revisó) — auto-save ── */}
+            {canEditar && doc.borrador_respuesta && (
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Datos del oficio</p>
+                <div>
+                  <label className="text-[10px] text-gray-500">Folio</label>
+                  <div className="flex gap-1.5">
+                    <input type="text" placeholder="SFA/SF/DPP/0001/2026"
+                      className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none font-mono"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={folioLocal} onChange={e => setFolioLocal(e.target.value)}
+                      onBlur={() => folioLocal !== (doc.folio_respuesta ?? '') && guardarFolioRef('folio', folioLocal)} />
+                    {!folioLocal && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const { folio } = await documentosApi.siguienteFolio(doc.tipo?.toUpperCase() || 'OFICIO', undefined)
+                            setFolioLocal(folio)
+                            await documentosApi.update(doc.id, { folio_respuesta: folio })
+                            invalidate()
+                          } catch { /* */ }
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-[9px] font-medium rounded-md border transition-colors whitespace-nowrap"
+                        style={{ borderColor: GUINDA, color: GUINDA }}
+                        title="Generar folio consecutivo automático">
+                        <Hash size={10} /> Auto
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500">Fecha del oficio</label>
+                  <input type="text" placeholder="16 de marzo de 2026 (vacío = fecha actual)"
+                    className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                    style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                    value={fechaRespLocal} onChange={e => setFechaRespLocal(e.target.value)}
+                    onBlur={() => fechaRespLocal !== (doc.fecha_respuesta ?? '') && guardarFolioRef('fecha', fechaRespLocal)} />
+                  <p className="text-[9px] text-gray-400 mt-0.5">Si se deja vacío, se usa la fecha del día de descarga</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-gray-500">Elaboró</label>
+                    <input type="text" placeholder="ECJ"
+                      className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={elaboroLocal} onChange={e => setElaboro(e.target.value)}
+                      onBlur={() => elaboroLocal !== (doc.referencia_elaboro ?? '') && guardarFolioRef('elaboro', elaboroLocal)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500">Revisó</label>
+                    <input type="text" placeholder="bhs"
+                      className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={revisoLocal} onChange={e => setReviso(e.target.value)}
+                      onBlur={() => revisoLocal !== (doc.referencia_reviso ?? '') && guardarFolioRef('reviso', revisoLocal)} />
+                  </div>
+                </div>
+              </div>
             )}
           </>
         )}
 
-        {/* ── Tab: Borrador / Contenido ───────────────────────────── */}
-        {tab === 'borrador' && (
+        {/* ── Tab: Contenido (borrador + IA + referencia) ──────────── */}
+        {tab === 'contenido' && (
           <>
             {/* Zona de subida de documento escaneado */}
             <div className="space-y-3">
               <input ref={fileRefEmitido} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp,.doc,.docx"
                 className="hidden"
-                onChange={e => { const f = e.target.files?.[0]; if (f) handleUploadFile(f) }} />
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleUploadFile(f); if (e.target) e.target.value = '' }} />
 
               {/* Visor del documento adjunto (si existe) */}
               {doc.url_storage && (
@@ -3006,18 +3163,20 @@ function PanelEmitido({
                       <iframe src={originalUrl} title="Documento adjunto" className="w-full h-full" style={{ border: 'none' }} />
                     </div>
                   ) : null}
-                  <div className="flex gap-2">
-                    <button onClick={() => fileRefEmitido.current?.click()} disabled={uploading}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
-                      {uploading ? <><RotateCcw size={10} className="animate-spin" /> Subiendo...</> : <><Upload size={10} /> Reemplazar</>}
-                    </button>
-                    <p className="flex-1 text-[10px] text-gray-400 truncate py-1.5">{doc.nombre_archivo}</p>
-                  </div>
+                  {canEditar && (
+                    <div className="flex gap-2">
+                      <button onClick={() => fileRefEmitido.current?.click()} disabled={uploading}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
+                        {uploading ? <><RotateCcw size={10} className="animate-spin" /> Subiendo...</> : <><Upload size={10} /> Reemplazar</>}
+                      </button>
+                      <p className="flex-1 text-[10px] text-gray-400 truncate py-1.5">{doc.nombre_archivo}</p>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Sin documento: zona de subida */}
-              {!doc.url_storage && (
+              {!doc.url_storage && canEditar && (
                 <div
                   onClick={() => fileRefEmitido.current?.click()}
                   className="border-2 border-dashed border-gray-200 rounded-xl py-6 px-4 text-center cursor-pointer hover:border-gray-400 hover:bg-gray-50 transition-all">
@@ -3035,8 +3194,106 @@ function PanelEmitido({
               )}
             </div>
 
-            {/* Contenido / borrador */}
-            {doc.borrador_respuesta ? (
+            {/* ── Generación IA con instrucciones ── */}
+            {canGenerar && canEditar && !doc.borrador_respuesta && (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Wand2 size={14} className="text-blue-600" />
+                  <p className="text-xs font-medium text-blue-800">Generar oficio con IA</p>
+                </div>
+                <textarea
+                  value={aiPrompt}
+                  onChange={e => setAiPrompt(e.target.value)}
+                  placeholder="Instrucciones para la IA (ej: 'Oficio de autorización de certificación presupuestal para SEDECO por $500,000 para mobiliario', 'Circular informando sobre el nuevo calendario de cierre presupuestal')..."
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-xs h-20 resize-none focus:outline-none focus:ring-1 focus:ring-blue-300"
+                />
+                <button onClick={() => handleGenerar(aiPrompt)} disabled={generando}
+                  className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-lg text-white font-medium disabled:opacity-50"
+                  style={{ backgroundColor: GUINDA }}>
+                  {generando
+                    ? <><RotateCcw size={12} className="animate-spin" /> Generando oficio...</>
+                    : <><Wand2 size={12} /> Generar con IA</>}
+                </button>
+              </div>
+            )}
+
+            {/* ── Cargar documento de referencia para IA ── */}
+            {canGenerar && canEditar && (
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Upload size={14} className="text-blue-600" />
+                  <p className="text-xs font-medium text-gray-700">Documento de referencia para IA</p>
+                </div>
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  Adjunta tablas, oficios previos, Excel o Word. La IA los analiza al generar el oficio. Usa las instrucciones para indicar: "usa el oficio adjunto como base", "incluye la tabla adjunta", etc.
+                </p>
+
+                {doc.referencia_archivo_nombre ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                      <FileText size={14} className="text-blue-600 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-medium text-blue-800 truncate">{doc.referencia_archivo_nombre}</p>
+                        <p className="text-[9px] text-blue-600">
+                          {doc.contenido_referencia
+                            ? `${Math.min(doc.contenido_referencia.length, 99999).toLocaleString()} caracteres extraídos`
+                            : 'Procesando…'}
+                        </p>
+                      </div>
+                      <button onClick={handleEliminarReferencia}
+                        className="p-1 rounded hover:bg-red-100 text-red-400 hover:text-red-600 transition-colors"
+                        title="Eliminar referencia">
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <input ref={refFileRefEmitido} type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp,.doc,.docx,.xlsx,.xls,.csv,.txt"
+                        className="hidden"
+                        onChange={e => { const f = e.target.files?.[0]; if (f) { handleEliminarReferencia().then(() => handleCargarReferencia(f)) }; if (e.target) e.target.value = '' }}
+                      />
+                      <button onClick={() => refFileRefEmitido.current?.click()}
+                        disabled={cargandoReferencia}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg font-medium transition-colors border border-blue-300 text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                        {cargandoReferencia
+                          ? <><RotateCcw size={10} className="animate-spin" /> Procesando…</>
+                          : <><Upload size={10} /> Cambiar archivo</>}
+                      </button>
+                      <button onClick={handleEliminarReferencia}
+                        className="flex items-center justify-center gap-1 py-1.5 px-3 text-[10px] rounded-lg font-medium transition-colors border border-red-300 text-red-600 hover:bg-red-50">
+                        <X size={10} /> Eliminar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <input ref={refFileRefEmitido} type="file"
+                      accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp,.doc,.docx,.xlsx,.xls,.csv,.txt"
+                      className="hidden"
+                      onChange={e => { const f = e.target.files?.[0]; if (f) handleCargarReferencia(f); if (e.target) e.target.value = '' }}
+                    />
+                    <button onClick={() => refFileRefEmitido.current?.click()}
+                      disabled={cargandoReferencia}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-lg font-medium text-white transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                      {cargandoReferencia
+                        ? <><RotateCcw size={12} className="animate-spin" /> Procesando documento…</>
+                        : <><Upload size={12} /> Cargar documento de referencia</>}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── Escribir manual (solo si no hay borrador) ── */}
+            {canGenerar && canEditar && !doc.borrador_respuesta && (
+              <button onClick={() => { setBorradorText(''); setEditBorrador(true) }}
+                className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
+                <Edit3 size={12} /> Escribir manualmente
+              </button>
+            )}
+
+            {/* ── Borrador existente ── */}
+            {doc.borrador_respuesta && (
               <div className="space-y-3">
                 {editBorrador ? (
                   <>
@@ -3059,44 +3316,20 @@ function PanelEmitido({
                     <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-700 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
                       {doc.borrador_respuesta}
                     </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => setEditBorrador(true)}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
-                        <Edit3 size={12} /> Editar
-                      </button>
-                      <button onClick={() => handleGenerar()} disabled={generando}
-                        className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50">
-                        <Wand2 size={12} /> {generando ? 'Regenerando...' : 'Regenerar IA'}
-                      </button>
-                    </div>
+                    {canEditar && (
+                      <div className="flex gap-2">
+                        <button onClick={() => setEditBorrador(true)}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
+                          <Edit3 size={12} /> Editar
+                        </button>
+                        <button onClick={() => handleGenerar(aiPrompt)} disabled={generando}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50">
+                          <Wand2 size={12} /> {generando ? 'Regenerando...' : 'Regenerar IA'}
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {/* Generación IA con instrucciones */}
-                <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Wand2 size={14} className="text-blue-600" />
-                    <p className="text-xs font-medium text-blue-800">Generar oficio con IA</p>
-                  </div>
-                  <textarea
-                    value={aiPrompt}
-                    onChange={e => setAiPrompt(e.target.value)}
-                    placeholder="Instrucciones para la IA (ej: 'Oficio de autorización de certificación presupuestal para SEDECO por $500,000 para mobiliario', 'Circular informando sobre el nuevo calendario de cierre presupuestal')..."
-                    className="w-full border border-blue-200 rounded-lg px-3 py-2 text-xs h-20 resize-none focus:outline-none focus:ring-1 focus:ring-blue-300"
-                  />
-                  <button onClick={() => handleGenerar(aiPrompt)} disabled={generando}
-                    className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg text-white font-medium disabled:opacity-50"
-                    style={{ backgroundColor: GUINDA }}>
-                    <Wand2 size={12} /> {generando ? 'Generando...' : 'Generar con IA'}
-                  </button>
-                </div>
-                {/* Escribir manual */}
-                <button onClick={() => { setBorradorText(''); setEditBorrador(true) }}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">
-                  <Edit3 size={12} /> Escribir manualmente
-                </button>
               </div>
             )}
           </>
@@ -3159,6 +3392,55 @@ function PanelEmitido({
             )}
           </>
         )}
+
+        {/* ── Tab: Historial ──────────────────────────────────────── */}
+        {tab === 'historial' && (
+          <>
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Historial de acciones
+            </p>
+            {historial.length === 0 ? (
+              <div className="text-center py-8 text-gray-400">
+                <History size={24} className="mx-auto mb-2 opacity-40" />
+                <p className="text-xs">Sin historial registrado</p>
+              </div>
+            ) : (
+              <div className="relative">
+                <div className="absolute left-3 top-2 bottom-2 w-px bg-gray-200" />
+                <div className="space-y-3">
+                  {historial.map((entry: HistorialItem) => {
+                    const isDevolucion = entry.tipo_accion === 'devolucion'
+                    const isReenvio = entry.tipo_accion === 'reenvio'
+                    const isFirma = entry.tipo_accion === 'firma'
+                    const dotColor = isDevolucion ? 'bg-red-500' : isReenvio ? 'bg-amber-500' : isFirma ? 'bg-green-500' : 'bg-gray-400'
+                    const bgColor = isDevolucion ? 'bg-red-50 border-red-100' : isReenvio ? 'bg-amber-50 border-amber-100' : isFirma ? 'bg-green-50 border-green-100' : 'bg-gray-50 border-gray-100'
+                    const icon = isDevolucion ? '🔴' : isReenvio ? '🟡' : isFirma ? '✅' : '🔄'
+                    return (
+                      <div key={entry.id} className="relative pl-8">
+                        <div className={`absolute left-1.5 top-2.5 w-3 h-3 rounded-full border-2 border-white ${dotColor}`} />
+                        <div className={`rounded-lg border p-2.5 ${bgColor}`}>
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs">{icon}</span>
+                              <span className="text-[10px] font-semibold text-gray-700">
+                                v{entry.version} {isDevolucion ? 'Devuelto' : isReenvio ? 'Reenviado' : isFirma ? 'Firmado' : entry.tipo_accion}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-gray-400">{formatDateTime(entry.timestamp)}</span>
+                          </div>
+                          {entry.usuario_nombre && (
+                            <p className="text-[10px] text-gray-500 mb-0.5">{entry.usuario_nombre}</p>
+                          )}
+                          <p className="text-xs text-gray-700 leading-relaxed">{entry.observaciones}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* ── Barra de acciones inferior ──────────────────────────────── */}
@@ -3188,46 +3470,52 @@ function PanelEmitido({
           </div>
         ) : doc.estado === 'borrador' ? (
           <div className="space-y-2">
-            <div className="flex gap-2">
-              {/* Director puede firmar directamente desde borrador si hay contenido */}
-              {(doc.borrador_respuesta || doc.url_storage) && isDirector && (
-                <button onClick={() => setShowFirmaModal(true)}
-                  className="flex-[2] flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold hover:opacity-90"
-                  style={{ backgroundColor: GUINDA }}>
-                  <FileSignature size={13} /> Firmar y publicar
-                </button>
-              )}
-              {/* Colaborador envía a revisión del Director */}
-              {(doc.borrador_respuesta || doc.url_storage) && !isDirector && (
-                <button onClick={() => handleCambiarEstado('en_revision')}
-                  className="flex-[2] flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold hover:opacity-90"
-                  style={{ backgroundColor: GUINDA }}>
-                  <Send size={13} /> Enviar a revisión
-                </button>
-              )}
-            </div>
-            <button onClick={onDelete}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-red-200 text-red-500 hover:bg-red-50">
-              <Trash2 size={10} /> Eliminar borrador
-            </button>
+            {/* Director puede firmar directamente desde borrador si hay contenido */}
+            {hasBorrador && canFirmar && (
+              <button onClick={() => setShowFirmaModal(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold hover:opacity-90"
+                style={{ backgroundColor: GUINDA }}>
+                <FileSignature size={13} /> Firmar y publicar
+              </button>
+            )}
+            {/* Secretaría / Área envía para firma del Director */}
+            {hasBorrador && canEnviarParaFirma && !canFirmar && (
+              <button onClick={() => handleCambiarEstado('en_revision')}
+                className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold hover:opacity-90"
+                style={{ backgroundColor: GUINDA }}>
+                <Send size={13} /> Enviar a firma del Director
+              </button>
+            )}
+            {canEliminar && (
+              <button onClick={onDelete}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-red-200 text-red-500 hover:bg-red-50">
+                <Trash2 size={10} /> Eliminar borrador
+              </button>
+            )}
           </div>
         ) : doc.estado === 'en_revision' ? (
           <div className="space-y-2">
             {/* Banner: En revisión del Director */}
-            <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg">
-              <Clock size={13} className="text-purple-600" />
-              <span className="text-[11px] font-medium text-purple-700">Pendiente de revisión y firma del Director</span>
-            </div>
-            {isDirector && (
+            {!canFirmar && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg">
+                <Clock size={13} className="text-purple-600" />
+                <span className="text-[11px] font-medium text-purple-700">Enviado para firma del Director. Pendiente de revisión.</span>
+              </div>
+            )}
+            {canFirmar && (
               <>
+                <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                  <Mail size={13} className="text-amber-600" />
+                  <span className="text-[11px] font-medium text-amber-700">Oficio recibido para su firma</span>
+                </div>
                 <button onClick={() => setShowFirmaModal(true)}
                   className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold hover:opacity-90"
                   style={{ backgroundColor: GUINDA }}>
                   <FileSignature size={13} /> Firmar y publicar
                 </button>
-                <button onClick={() => handleCambiarEstado('borrador')}
-                  className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50">
-                  <CornerUpLeft size={10} /> Devolver a borrador
+                <button onClick={() => setShowDevolucionModal(true)}
+                  className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-red-300 text-red-600 hover:bg-red-50">
+                  <CornerUpLeft size={10} /> Devolver con observaciones
                 </button>
               </>
             )}
@@ -3249,6 +3537,9 @@ function PanelEmitido({
             </div>
             <div className="px-5 py-4 space-y-3">
               <p className="text-xs text-gray-600">{doc.asunto}</p>
+              {doc.folio_respuesta && (
+                <p className="text-[10px] text-gray-500 font-mono">{doc.folio_respuesta}</p>
+              )}
               <div>
                 <div className="flex items-center gap-2 mb-1.5">
                   <Lock size={11} className="text-gray-500" />
@@ -3276,6 +3567,45 @@ function PanelEmitido({
           </div>
         </div>
       )}
+
+      {/* ── Modal devolución con observaciones ── */}
+      {showDevolucionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-96 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <CornerUpLeft size={16} className="text-red-600" />
+                <h3 className="text-sm font-semibold text-gray-900">Devolver oficio</h3>
+              </div>
+              <button onClick={() => { setShowDevolucionModal(false); setObservacionesDevolucion('') }}
+                className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-gray-600">{doc.asunto}</p>
+              <div>
+                <label className="text-[10px] font-semibold text-gray-600 uppercase tracking-wide block mb-1.5">
+                  Observaciones para la Secretaría
+                </label>
+                <textarea
+                  value={observacionesDevolucion}
+                  onChange={e => setObservacionesDevolucion(e.target.value)}
+                  placeholder="Indique las correcciones necesarias (mín. 10 caracteres)..."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs h-24 resize-none focus:outline-none focus:ring-1"
+                />
+                <p className="text-[9px] text-gray-400 mt-0.5">{observacionesDevolucion.length}/10 caracteres mínimos</p>
+              </div>
+              <button onClick={handleDevolver}
+                disabled={devolviendo || observacionesDevolucion.trim().length < 10}
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 text-xs rounded-lg font-semibold text-white disabled:opacity-50 bg-red-600 hover:bg-red-700">
+                {devolviendo
+                  ? <><RotateCcw size={12} className="animate-spin" /> Devolviendo...</>
+                  : <><CornerUpLeft size={12} /> Devolver con observaciones</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Visor flotante modal — emitido */}
       {visorFlotanteEmitido && pdfUrl && (
         <VisorFlotante

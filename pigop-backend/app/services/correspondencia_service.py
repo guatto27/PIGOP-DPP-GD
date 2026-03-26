@@ -867,10 +867,16 @@ class CorrespondenciaService:
                 model="gemini-2.5-flash",
                 contents=contents,
             )
-            return resp.text.strip()
+            # Limpiar encabezados que la IA incluyó a pesar de las instrucciones
+            return self._limpiar_encabezados_ia(resp.text.strip())
         except Exception as e:
             logger.error(f"Error Gemini generar_borrador: {e}")
-            return f"[Error al generar borrador: {e}]\n\nComplete manualmente."
+            err_str = str(e)
+            if "503" in err_str or "UNAVAILABLE" in err_str or "overloaded" in err_str.lower():
+                return "[⚠️ El servicio de IA no está disponible temporalmente por alta demanda. Por favor, intente de nuevo en unos segundos usando el botón 'Regenerar IA'.]\n\nMientras tanto, puede escribir el contenido manualmente."
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                return "[⚠️ Se ha excedido el límite de solicitudes al servicio de IA. Espere un momento e intente nuevamente.]\n\nMientras tanto, puede escribir el contenido manualmente."
+            return f"[⚠️ Error al generar borrador. Intente nuevamente o complete manualmente.]\n\nDetalle técnico: {e}"
 
     # ── Generación de borrador para documentos EMITIDOS ─────────────────────
 
@@ -972,10 +978,16 @@ class CorrespondenciaService:
                 model="gemini-2.5-flash",
                 contents=contents,
             )
-            return resp.text.strip()
+            # Limpiar encabezados que la IA incluyó a pesar de las instrucciones
+            return self._limpiar_encabezados_ia(resp.text.strip())
         except Exception as e:
             logger.error(f"Error Gemini generar_borrador_emitido: {e}")
-            return f"[Error al generar borrador: {e}]\n\nComplete manualmente."
+            err_str = str(e)
+            if "503" in err_str or "UNAVAILABLE" in err_str or "overloaded" in err_str.lower():
+                return "[⚠️ El servicio de IA no está disponible temporalmente por alta demanda. Por favor, intente de nuevo en unos segundos usando el botón 'Regenerar IA'.]\n\nMientras tanto, puede escribir el contenido manualmente."
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                return "[⚠️ Se ha excedido el límite de solicitudes al servicio de IA. Espere un momento e intente nuevamente.]\n\nMientras tanto, puede escribir el contenido manualmente."
+            return f"[⚠️ Error al generar borrador. Intente nuevamente o complete manualmente.]\n\nDetalle técnico: {e}"
 
     # ── Generación de oficio estructurado (4 secciones) ─────────────────────
 
@@ -1065,6 +1077,9 @@ class CorrespondenciaService:
     @staticmethod
     def _parse_secciones(text: str) -> dict:
         """Parsea la respuesta de Gemini en 4 secciones nombradas."""
+        # Primero limpiar encabezados que la IA no debió incluir
+        text = CorrespondenciaService._limpiar_encabezados_ia(text)
+
         secciones = {}
         patterns = {
             "fundamento": r"\[SECCION_1[^\]]*\](.*?)(?=\[SECCION_2|\Z)",
@@ -1085,6 +1100,59 @@ class CorrespondenciaService:
                 "cierre": "",
             }
         return secciones
+
+    @staticmethod
+    def _limpiar_encabezados_ia(text: str) -> str:
+        """
+        Elimina encabezados/destinatarios que la IA genera a veces
+        a pesar de las instrucciones de no hacerlo.
+        Estos ya los agrega automáticamente el generador de PDF/DOCX.
+        """
+        import re as _re
+
+        # Eliminar líneas de lugar/fecha tipo "Morelia, Michoacán, 25 de marzo de 2026"
+        text = _re.sub(
+            r'^[ \t]*Morelia,?\s+Michoac[áa]n,?\s+\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\.?\s*\n',
+            '', text, flags=_re.MULTILINE | _re.IGNORECASE
+        )
+
+        # Eliminar bloque de destinatario:
+        # Patrón: "C. " o "C.P." o "LIC." o "MTRO." seguido de nombre en MAYÚSCULAS
+        # y líneas subsiguientes con cargo/dependencia/PRESENTE.
+        # Hasta encontrar una línea en blanco o inicio de párrafo normal
+        text = _re.sub(
+            r'^[ \t]*\*{0,2}C\.?\s+[A-ZÁÉÍÓÚÑ\s\.\,]+\*{0,2}\s*\n'   # "C. NOMBRE COMPLETO"
+            r'(?:[ \t]*\*{0,2}[\-—]+\*{0,2}\s*\n)?'                     # posible línea "---"
+            r'(?:[ \t]*\*{0,2}[A-ZÁÉÍÓÚÑ\.\s\,]+\*{0,2}\.?\s*\n)*'     # cargo/dependencia/nombre
+            r'(?:[ \t]*\*{0,2}PRESENTE\.?\*{0,2}\s*\n)?',               # "PRESENTE."
+            '', text, count=1, flags=_re.MULTILINE
+        )
+
+        # Eliminar línea suelta "PRESENTE." que pueda quedar
+        text = _re.sub(r'^[ \t]*\*{0,2}PRESENTE\.?\*{0,2}\s*$', '', text, count=1, flags=_re.MULTILINE)
+
+        # Eliminar líneas de datos institucionales que la IA a veces incluye
+        for pattern in [
+            r'^[ \t]*\*{0,2}Depend?encia:\*{0,2}\s+.*$',
+            r'^[ \t]*\*{0,2}Sub-depend?encia:\*{0,2}\s+.*$',
+            r'^[ \t]*\*{0,2}Oficina:\*{0,2}\s+.*$',
+            r'^[ \t]*\*{0,2}No\.\s*de\s*oficio:\*{0,2}\s+.*$',
+            r'^[ \t]*\*{0,2}Expediente:\*{0,2}\s+.*$',
+            r'^[ \t]*\*{0,2}Asunto:\*{0,2}\s+.*$',
+        ]:
+            text = _re.sub(pattern, '', text, flags=_re.MULTILINE | _re.IGNORECASE)
+
+        # Eliminar bloque de firma al final (ATENTAMENTE, nombre, cargo)
+        text = _re.sub(
+            r'\n\s*\*{0,2}A\s*T\s*E\s*N\s*T\s*A\s*M\s*E\s*N\s*T\s*E\*{0,2}\s*'
+            r'(?:\n.*){0,5}$',
+            '', text, flags=_re.IGNORECASE
+        )
+
+        # Limpiar líneas en blanco múltiples al inicio
+        text = text.lstrip('\n')
+
+        return text
 
 
 # Singleton

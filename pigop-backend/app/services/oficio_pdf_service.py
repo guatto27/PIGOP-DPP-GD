@@ -202,10 +202,21 @@ class OficioPdfService:
         elements.append(Spacer(1, 14))
 
         # ── Destinatario ────────────────────────────────────────────────────
-        elements.append(Paragraph(f'<b>C. {destinatario_nombre.upper()}</b>', s_bold))
-        elements.append(Paragraph(f'<b>{destinatario_cargo.upper()}</b>', s_bold))
-        elements.append(Paragraph(f'<b>{destinatario_dependencia.upper()}.</b>', s_bold))
-        elements.append(Paragraph('<b>PRESENTE.</b>', s_bold))
+        # Estructura: nombre / cargo / dependencia / PRESENTE.
+        # Solo incluir líneas que tengan contenido real (no "---" ni vacías)
+        dest_lines = []
+        if destinatario_nombre and destinatario_nombre.strip() not in ("", "---"):
+            dest_lines.append(destinatario_nombre.upper())
+        if destinatario_cargo and destinatario_cargo.strip() not in ("", "---"):
+            dest_lines.append(destinatario_cargo.upper())
+        if destinatario_dependencia and destinatario_dependencia.strip() not in ("", "---"):
+            dep_text = destinatario_dependencia.upper()
+            if not dep_text.endswith('.'):
+                dep_text += '.'
+            dest_lines.append(dep_text)
+        dest_lines.append('PRESENTE.')
+        for line in dest_lines:
+            elements.append(Paragraph(f'<b>{line}</b>', s_bold))
         elements.append(Spacer(1, 14))
 
         # ── Cuerpo ──────────────────────────────────────────────────────────
