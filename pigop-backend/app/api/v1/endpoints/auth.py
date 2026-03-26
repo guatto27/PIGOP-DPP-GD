@@ -34,7 +34,7 @@ async def login(
     from sqlalchemy import text as _text
     await db.execute(
         _text("UPDATE usuarios SET ultimo_acceso=:ts WHERE id=:uid"),
-        {"ts": datetime.now(timezone.utc).isoformat(), "uid": str(user.id)},
+        {"ts": datetime.now(timezone.utc), "uid": str(user.id)},
     )
     await db.commit()
 
