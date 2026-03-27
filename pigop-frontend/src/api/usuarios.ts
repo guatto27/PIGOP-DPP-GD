@@ -106,10 +106,14 @@ export const clientesAdminApi = {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 export const ROL_LABELS: Record<string, string> = {
-  superadmin:    'Superadministrador',
+  superadmin:    'Administrador',
   admin_cliente: 'Director',
-  secretaria:    'Secretaría',
+  secretaria:    'Asistente de Dirección',
+  asesor:        'Asesor',
+  subdirector:   'Subdirector(a)',
+  jefe_depto:    'Jefe(a) de Departamento',
   analista:      'Analista',
+  auditor:       'Auditor SGC',
   consulta:      'Solo consulta',
 }
 
@@ -117,7 +121,11 @@ export const ROL_COLORS: Record<string, { bg: string; text: string }> = {
   superadmin:    { bg: '#fdf2f8', text: '#9d174d' },
   admin_cliente: { bg: '#eff6ff', text: '#1d4ed8' },
   secretaria:    { bg: '#fef3c7', text: '#92400e' },
+  asesor:        { bg: '#f0f9ff', text: '#0369a1' },
+  subdirector:   { bg: '#faf5ff', text: '#7e22ce' },
+  jefe_depto:    { bg: '#ecfdf5', text: '#047857' },
   analista:      { bg: '#f0fdf4', text: '#15803d' },
+  auditor:       { bg: '#f8fafc', text: '#475569' },
   consulta:      { bg: '#f9fafb', text: '#6b7280' },
 }
 

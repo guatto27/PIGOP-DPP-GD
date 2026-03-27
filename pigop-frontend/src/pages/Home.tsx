@@ -88,6 +88,16 @@ function getGreeting(): string {
   return 'Buenas noches'
 }
 
+function getPrimerNombre(nombreCompleto: string | undefined | null): string {
+  if (!nombreCompleto) return 'Usuario'
+  // Quitar títulos/prefijos comunes
+  const sinTitulo = nombreCompleto
+    .replace(/^(Mtro\.?|Mtra\.?|Lic\.?|Ing\.?|Dr\.?|Dra\.?|C\.P\.?|L\.A\.E\.?|C\.)\s+/i, '')
+    .trim()
+  // Retornar solo el primer nombre
+  return sinTitulo.split(' ')[0] || 'Usuario'
+}
+
 function formatDateShort(dateStr: string): string {
   const d = new Date(dateStr)
   return d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })
@@ -298,7 +308,7 @@ export default function Home() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">
-            {getGreeting()}, {user.nombre_completo?.split(' ')[0] ?? 'Usuario'}
+            {getGreeting()}, {getPrimerNombre(user.nombre_completo)}
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {ROL_LABELS[user.rol] ?? user.rol} · {new Date().toLocaleDateString('es-MX', {
