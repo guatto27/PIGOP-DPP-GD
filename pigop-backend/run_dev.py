@@ -122,6 +122,62 @@ with sync_engine.connect() as _mc:
     _mc.commit()
 print("✅ Columnas documentos_oficiales actualizadas")
 
+# ── Catálogo de funcionarios y UPPs ──────────────────────────────────────────
+with sync_engine.connect() as _catc:
+    _catc.execute(text('''CREATE TABLE IF NOT EXISTS catalogo_funcionarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo_upp VARCHAR(10) NOT NULL,
+        nombre_upp VARCHAR(255) NOT NULL,
+        codigo_ur VARCHAR(10),
+        nombre_ur VARCHAR(255),
+        nombre_titular VARCHAR(255),
+        cargo VARCHAR(255),
+        estatus VARCHAR(50) DEFAULT 'VIGENTE'
+    )'''))
+    _catc.commit()
+    # Importar datos si la tabla está vacía
+    _count = _catc.execute(text("SELECT COUNT(*) FROM catalogo_funcionarios")).fetchone()[0]
+    if _count == 0:
+        _cat_path = os.path.join(os.path.dirname(__file__), "..", "OFICIOS PRUEBA", "CATALOGO FUNCIONARIOS UPPS", "CATALOGO FUNCIONARIOS UPPS.xlsx")
+        # Intentar ruta alternativa
+        _cat_paths = [
+            _cat_path,
+            "/Users/mafm/Documents/Documents/SECRETARÍA DE FINANZAS MICH/IA DPP/OFICIOS PRUEBA/CATALOGO FUNCIONARIOS UPPS/CATALOGO FUNCIONARIOS UPPS.xlsx",
+        ]
+        _cat_file = None
+        for _cp in _cat_paths:
+            if os.path.exists(_cp):
+                _cat_file = _cp
+                break
+        if _cat_file:
+            try:
+                import openpyxl as _opx
+                _wb = _opx.load_workbook(_cat_file, data_only=True)
+                _ws = _wb['2021-2027']
+                _ins = 0
+                for _row in _ws.iter_rows(min_row=2, max_row=_ws.max_row, values_only=True):
+                    _id_upp = str(_row[0]).strip() if _row[0] else ''
+                    _desc_upp = str(_row[1]).strip() if _row[1] else ''
+                    _cod_ur = str(_row[2]).strip() if _row[2] else ''
+                    _desc_ur = str(_row[3]).strip() if _row[3] else ''
+                    _titular = str(_row[4]).strip() if _row[4] else ''
+                    _est = str(_row[5]).strip() if _row[5] else ''
+                    if not _id_upp or _id_upp == 'None' or _est != 'VIGENTE':
+                        continue
+                    _catc.execute(text(
+                        "INSERT INTO catalogo_funcionarios (codigo_upp,nombre_upp,codigo_ur,nombre_ur,nombre_titular,cargo,estatus) "
+                        "VALUES (:u,:nu,:ur,:nur,:tit,:car,:est)"
+                    ), {"u": _id_upp, "nu": _desc_upp, "ur": _cod_ur, "nur": _desc_ur, "tit": _titular, "car": _desc_ur, "est": _est})
+                    _ins += 1
+                _catc.commit()
+                print(f"✅ Catálogo: {_ins} funcionarios importados")
+            except Exception as _e:
+                print(f"⚠️  Error importando catálogo: {_e}")
+        else:
+            print("⚠️  Archivo catálogo no encontrado — tabla vacía")
+    else:
+        print(f"✅ Catálogo: {_count} funcionarios existentes")
+
 # ── Migración de usuarios (columnas nuevas) ─────────────────────────────────
 _NUEVAS_COLUMNAS_USR = [
     "ALTER TABLE usuarios ADD COLUMN modulos_acceso TEXT DEFAULT '[]'",

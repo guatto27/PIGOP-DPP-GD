@@ -751,3 +751,31 @@ export const certificadosApi = {
     return res.data
   },
 }
+
+// ── Catálogo de UPPs y Funcionarios ─────────────────────────────────────────
+
+export interface UPPItem {
+  codigo_upp: string
+  nombre_upp: string
+}
+
+export interface FuncionarioItem {
+  id: number
+  codigo_upp: string
+  nombre_upp: string
+  codigo_ur: string | null
+  nombre_ur: string | null
+  nombre_titular: string | null
+  cargo: string | null
+}
+
+export const catalogoApi = {
+  buscarUPPs: async (q: string = ''): Promise<UPPItem[]> => {
+    const res = await apiClient.get('/catalogo/upps', { params: { q } })
+    return res.data
+  },
+  buscarFuncionarios: async (q: string = '', upp: string = ''): Promise<FuncionarioItem[]> => {
+    const res = await apiClient.get('/catalogo/funcionarios', { params: { q, upp } })
+    return res.data
+  },
+}
