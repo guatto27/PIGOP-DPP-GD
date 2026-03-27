@@ -139,10 +139,10 @@ export default function Home() {
     })
   }, [user, canBypass])
 
-  // Si el usuario solo tiene acceso a un módulo, redirigir directamente
+  // Siempre mostrar dashboard con saludo — no redirigir automáticamente
   useEffect(() => {
-    if (userModules.length === 1 && !canBypass) {
-      navigate(userModules[0].path, { replace: true })
+    if (false) {  // Deshabilitado: siempre mostrar Home
+      navigate('/', { replace: true })
     }
   }, [userModules, canBypass, navigate])
 
@@ -150,8 +150,8 @@ export default function Home() {
   const inactiveModules = canBypass ? ALL_MODULES.filter(m => !m.active) : []
 
   // ── Data fetching ───────────────────────────────────────────────────────────
-  const hasDocModule = canBypass || (user?.modulos_acceso || []).includes('gestion_documental')
-  const hasDeppModule = canBypass || (user?.modulos_acceso || []).includes('validacion_depp')
+  const hasDocModule = userModules.some(m => m.id === 'gestion_documental') || canBypass
+  const hasDeppModule = userModules.some(m => m.id === 'validacion_depp') || canBypass
 
   const { data: docsRecibidos, isLoading: loadingDocs } = useQuery({
     queryKey: ['home-docs-recibidos'],
@@ -199,6 +199,7 @@ export default function Home() {
       vencidos,
       totalEmitidos: docsEmitidos?.length ?? 0,
       borradores: docsEmitidos?.filter(d => d.estado === 'borrador').length ?? 0,
+      emitidosPendientesFirma: docsEmitidos?.filter(d => ['respondido', 'en_revision'].includes(d.estado) && !d.firmado_digitalmente).length ?? 0,
     }
   }, [docsRecibidos, docsEmitidos])
 
@@ -225,6 +226,18 @@ export default function Home() {
           bg: 'bg-amber-50',
           border: 'border-amber-200',
           text: `${docMetrics.respondidos} documento${docMetrics.respondidos !== 1 ? 's' : ''} pendiente${docMetrics.respondidos !== 1 ? 's' : ''} de firma`,
+          action: () => navigate('/gestion-documental'),
+        })
+      }
+
+      // Director: emitidos pendientes de firma
+      if ((isDirector || isSuperadmin) && docMetrics.emitidosPendientesFirma > 0) {
+        items.push({
+          icon: FileSignature,
+          color: 'text-blue-600',
+          bg: 'bg-blue-50',
+          border: 'border-blue-200',
+          text: `${docMetrics.emitidosPendientesFirma} oficio${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} emitido${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} pendiente${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} de firma`,
           action: () => navigate('/gestion-documental'),
         })
       }

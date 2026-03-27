@@ -14,7 +14,7 @@ from app.core.exceptions import BusinessError, ForbiddenError, NotFoundError
 from app.crud.documento import crud_documento
 from app.models.user import Usuario
 from app.schemas.common import MessageResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from app.schemas.documento import (
     ConfirmarTurnoInput,
     DevolucionInput,
