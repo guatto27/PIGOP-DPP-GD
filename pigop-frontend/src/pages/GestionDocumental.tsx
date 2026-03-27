@@ -2430,50 +2430,55 @@ function PanelRecibido({
 
               {/* ── Acuse de recibido (solo secretaria/admin) ── */}
               {(isSecretaria || isSuperadmin) && (
-                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
-                  <div className="flex items-center gap-2">
-                    <ClipboardCheck size={13} className="text-blue-600" />
-                    <span className="text-[10px] font-semibold text-blue-800 uppercase tracking-wide">Acuse de recibido</span>
+                <div className="mt-4 p-4 bg-blue-50 border-2 border-blue-300 rounded-xl space-y-3 shadow-sm">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                      <ClipboardCheck size={16} className="text-blue-600" />
+                    </div>
+                    <div>
+                      <span className="text-sm font-bold text-blue-800">Acuse de recibido</span>
+                      <p className="text-[10px] text-blue-500">Evidencia de entrega del oficio firmado</p>
+                    </div>
                   </div>
                   {acuseLocal.url ? (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-2 px-2 py-1.5 bg-white rounded border border-blue-100">
-                        <FileText size={11} className="text-blue-500" />
-                        <span className="text-[10px] text-blue-700 flex-1 truncate">{acuseLocal.nombre}</span>
-                        {acuseLocal.fecha && <span className="text-[9px] text-blue-500">Acuse: {acuseLocal.fecha}</span>}
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-2.5 px-3 py-2.5 bg-white rounded-lg border border-blue-200 shadow-sm">
+                        <FileText size={16} className="text-blue-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-blue-800 truncate">{acuseLocal.nombre}</p>
+                          {acuseLocal.fecha && <p className="text-[10px] text-blue-500 mt-0.5">Fecha acuse: {acuseLocal.fecha}</p>}
+                        </div>
                       </div>
-                      <div className="flex gap-1.5">
+                      <div className="flex gap-2">
                         <button onClick={async () => {
                           try {
                             const url = await documentosApi.obtenerAcuseRecibidoUrl(doc.id)
-                            // Abrir en nueva pestaña con blob URL
                             const w = window.open(url, '_blank')
                             if (!w) {
-                              // Si el navegador bloquea pop-ups, usar enlace directo
                               const a = document.createElement('a')
                               a.href = url; a.target = '_blank'; a.click()
                             }
                           } catch { window.alert('Error al cargar acuse') }
-                        }} className="flex-1 flex items-center justify-center gap-1 py-1 text-[10px] rounded border border-blue-200 text-blue-700 hover:bg-blue-100">
-                          <Eye size={10} /> Ver acuse
+                        }} className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm">
+                          <Eye size={14} /> Ver acuse de recibido
                         </button>
                         <button onClick={async () => {
                           if (!window.confirm('¿Eliminar acuse de recibido?')) return
                           await documentosApi.eliminarAcuseRecibido(doc.id)
                           setAcuseLocal({ url: null, nombre: null, fecha: null })
                           invalidate()
-                        }} className="flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-red-200 text-red-600 hover:bg-red-50">
-                          <X size={10} /> Eliminar
+                        }} className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-medium rounded-lg border border-red-300 text-red-600 hover:bg-red-50 transition-colors">
+                          <X size={13} /> Eliminar
                         </button>
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-1.5">
-                      <p className="text-[9px] text-blue-600">Suba el escaneo del oficio con sello de acuse. La fecha se extrae automáticamente del sello.</p>
-                      <label className="flex items-center justify-center gap-1.5 py-3 text-[10px] rounded-lg font-medium border-2 border-dashed border-blue-300 text-blue-700 hover:bg-blue-100 cursor-pointer transition-colors">
+                    <div className="space-y-2">
+                      <p className="text-xs text-blue-600">Suba el escaneo del oficio con sello de acuse de la dependencia destino. La fecha se extrae automáticamente.</p>
+                      <label className="flex items-center justify-center gap-2 py-4 text-sm rounded-xl font-semibold border-2 border-dashed border-blue-400 text-blue-700 hover:bg-blue-100 cursor-pointer transition-colors">
                         {subiendoAcuse
-                          ? <><RotateCcw size={11} className="animate-spin" /> Subiendo y extrayendo fecha del sello...</>
-                          : <><Upload size={11} /> Subir escaneo de acuse (PDF/imagen)</>}
+                          ? <><RotateCcw size={14} className="animate-spin" /> Subiendo y extrayendo fecha del sello...</>
+                          : <><Upload size={16} /> Subir escaneo de acuse (PDF / imagen)</>}
                         <input type="file" accept=".pdf,.jpg,.jpeg,.png" className="hidden" disabled={subiendoAcuse} onChange={async (e) => {
                           const f = e.target.files?.[0]
                           if (!f) return
