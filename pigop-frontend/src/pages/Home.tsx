@@ -158,19 +158,21 @@ export default function Home() {
   const hasDocModule = userModules.some(m => m.id === 'gestion_documental') || canBypass
   const hasDeppModule = userModules.some(m => m.id === 'validacion_depp') || canBypass
 
-  const { data: docsRecibidos, isLoading: loadingDocs } = useQuery({
+  const { data: docsRecibidosResult, isLoading: loadingDocs } = useQuery({
     queryKey: ['home-docs-recibidos'],
     queryFn: () => documentosApi.list({ flujo: 'recibido', limit: 200 }),
     enabled: hasDocModule,
     staleTime: 30_000,
   })
+  const docsRecibidos = docsRecibidosResult?.items
 
-  const { data: docsEmitidos } = useQuery({
+  const { data: docsEmitidosResult } = useQuery({
     queryKey: ['home-docs-emitidos'],
     queryFn: () => documentosApi.list({ flujo: 'emitido', limit: 200 }),
     enabled: hasDocModule,
     staleTime: 30_000,
   })
+  const docsEmitidos = docsEmitidosResult?.items
 
   const { data: depps, isLoading: loadingDepps } = useQuery({
     queryKey: ['home-depps'],

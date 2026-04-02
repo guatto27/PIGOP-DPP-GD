@@ -152,12 +152,19 @@ async def obtener_mi_certificado(
     if not cert:
         return CertificadoInfoResponse(tiene_certificado=False)
 
-    # Calcular vigencia (SQLite devuelve datetimes naive, usamos naive para comparar)
+    # Calcular vigencia — normalizar a naive UTC para evitar mismatch con SQLite
     now = datetime.utcnow()
+    desde = cert.valido_desde
+    hasta = cert.valido_hasta
+    # SQLite puede devolver datetimes naive o aware según el driver
+    if desde and hasattr(desde, 'tzinfo') and desde.tzinfo is not None:
+        desde = desde.replace(tzinfo=None)
+    if hasta and hasattr(hasta, 'tzinfo') and hasta.tzinfo is not None:
+        hasta = hasta.replace(tzinfo=None)
     vigente = (
         cert.activo
-        and (cert.valido_desde is None or cert.valido_desde <= now)
-        and (cert.valido_hasta is None or cert.valido_hasta >= now)
+        and (desde is None or desde <= now)
+        and (hasta is None or hasta >= now)
     )
 
     return CertificadoInfoResponse(

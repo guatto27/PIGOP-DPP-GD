@@ -316,8 +316,9 @@ class OficioPdfService:
 
         # ── Referencia ──────────────────────────────────────────────────────
         if referencia_elaboro or referencia_reviso:
+            from app.services.correspondencia_service import generar_referencia_oficio
             elements.append(Spacer(1, 12))
-            ref = f"MAFM/{referencia_elaboro or '???'}/{referencia_reviso or '???'}"
+            ref = generar_referencia_oficio("DIR", referencia_elaboro, referencia_reviso)
             elements.append(Paragraph(ref, s_small))
 
         # ── Build ───────────────────────────────────────────────────────────

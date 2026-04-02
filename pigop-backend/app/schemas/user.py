@@ -73,6 +73,7 @@ class UsuarioUpdate(BaseModel):
 class UsuarioResponse(UsuarioBase):
     id: UUID
     cliente_id: Optional[UUID] = None
+    area_codigo: Optional[str] = None
     ultimo_acceso: Optional[datetime] = None
     creado_en: datetime
 

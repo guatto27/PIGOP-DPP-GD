@@ -67,6 +67,13 @@ export interface DocumentoListItem {
   acuse_recibido_url:    string | null
   acuse_recibido_nombre: string | null
   acuse_recibido_fecha:  string | null
+  visto_bueno_subdirector: boolean
+  upp_solicitante:  string | null
+  tipo_memorandum:  string | null
+  dependencia_solicitante: string | null
+  upp_solicitante_codigo: string | null
+  documento_origen_id: string | null
+  memorandum_orden_direccion: number | null
   has_borrador:     boolean
   creado_en:        string
 }
@@ -388,9 +395,10 @@ export const documentosApi = {
     fecha_hasta?: string
     skip?: number
     limit?: number
-  }): Promise<DocumentoListItem[]> => {
+  }): Promise<{ items: DocumentoListItem[]; total: number }> => {
     const res = await apiClient.get('/documentos/', { params })
-    return res.data
+    const total = parseInt(res.headers['x-total-count'] || '0', 10)
+    return { items: res.data, total }
   },
 
   areas: async (): Promise<AreaDPP[]> => {
@@ -591,6 +599,18 @@ export const documentosApi = {
 
   acusarDespachoLote: async (ids: string[]): Promise<{ message: string; success: boolean }> => {
     const res = await apiClient.post('/documentos/acusar-despacho-lote', { ids })
+    return res.data
+  },
+
+  // ── Visto Bueno del Subdirector ──
+  registrarVistoBueno: async (id: string): Promise<Documento> => {
+    const res = await apiClient.post(`/documentos/${id}/visto-bueno`)
+    return res.data
+  },
+
+  // ── Memorándums ──
+  registrarMemorandum: async (data: Record<string, unknown>): Promise<Documento> => {
+    const res = await apiClient.post('/documentos/memorandum', data)
     return res.data
   },
 

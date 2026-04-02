@@ -5,7 +5,7 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Query, Request, Response, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_active_user
@@ -70,10 +70,37 @@ def _assert_acceso(current_user: Usuario, cliente_id: str) -> None:
         raise ForbiddenError("No tienes acceso a recursos de este cliente.")
 
 
+# Jerarquía de áreas DPP — cada área ve sus propias + departamentos subordinados
+AREA_JERARQUIA = {
+    "DIR":  None,   # Director y Secretaría ven TODO (no se filtra)
+    "SCG":  ["SCG", "DREP", "DCP"],     # Subdir. Control y Gasto → sus departamentos
+    "SPF":  ["SPF", "DASP", "DFNP"],    # Subdir. Presupuesto y Finanzas → sus departamentos
+    "DREP": ["DREP"],                     # Depto. solo se ve a sí mismo
+    "DCP":  ["DCP"],
+    "DASP": ["DASP"],
+    "DFNP": ["DFNP"],
+}
+
+def _areas_visibles(user: Usuario) -> Optional[list[str]]:
+    """
+    Retorna la lista de area_turno que el usuario puede ver,
+    o None si puede ver todo (director, secretaria, superadmin, auditor).
+    """
+    # Roles con visibilidad total
+    if user.rol in ("superadmin", "admin_cliente", "secretaria", "asesor", "auditor", "consulta"):
+        return None
+    # Si tiene area_codigo, usar jerarquía
+    area = getattr(user, 'area_codigo', None)
+    if not area:
+        return None  # sin área asignada → ver todo (legacy)
+    return AREA_JERARQUIA.get(area, [area])
+
+
 # ---------- Listado ----------------------------------------------------------
 
 @router.get("/", response_model=List[DocumentoListResponse], summary="Listar documentos")
 async def listar_documentos(
+    response: Response,
     skip:       int  = Query(0, ge=0),
     limit:      int  = Query(200, ge=1, le=500),
     flujo:      Optional[str] = Query(None, description="recibido | emitido"),
@@ -90,19 +117,25 @@ async def listar_documentos(
     if current_user.rol != "superadmin":
         cliente_id = str(current_user.cliente_id)
 
-    return await crud_documento.list_documentos(
-        db,
-        cliente_id=cliente_id,
-        flujo=flujo,
-        tipo=tipo,
-        estado=estado,
+    # Filtro por estructura organizacional
+    areas_vis = _areas_visibles(current_user)
+    # Si el usuario pidió filtro manual de area_turno, respetar solo si está en sus visibles
+    if area_turno and areas_vis and area_turno not in areas_vis:
+        area_turno = None  # no tiene acceso a esa área
+
+    filter_args = dict(
+        cliente_id=cliente_id, flujo=flujo, tipo=tipo, estado=estado,
         area_turno=area_turno,
-        busqueda=busqueda,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        skip=skip,
-        limit=limit,
+        area_turno_in=areas_vis if not area_turno else None,
+        busqueda=busqueda, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
     )
+
+    # Obtener total para paginación (header X-Total-Count)
+    total = await crud_documento.count_documentos(db, **filter_args)
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+
+    return await crud_documento.list_documentos(db, **filter_args, skip=skip, limit=limit)
 
 
 # ---------- Siguiente folio consecutivo -------------------------------------
@@ -373,6 +406,77 @@ async def exportar_recibidos(
     )
 
 
+@router.get("/export-emitidos", summary="Exportar documentos emitidos a Excel")
+async def exportar_emitidos(
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+    busqueda: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """Genera y descarga un archivo Excel con los documentos emitidos."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    cliente_id = None if current_user.rol == "superadmin" else str(current_user.cliente_id)
+    docs = await crud_documento.list_documentos(
+        db, cliente_id=cliente_id, flujo="emitido", busqueda=busqueda,
+        fecha_desde=fecha_desde, fecha_hasta=fecha_hasta, skip=0, limit=10000,
+    )
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Documentos Emitidos"
+
+    guinda_fill = PatternFill("solid", fgColor="911A3A")
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    center = Alignment(horizontal="center", vertical="center")
+    wrap = Alignment(vertical="top", wrap_text=True)
+    thin = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    headers = ["No. Oficio", "Asunto", "Área", "Destinatario", "Estado", "Fecha", "UPP"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = guinda_fill
+        cell.font = header_font
+        cell.alignment = center
+        cell.border = thin
+
+    for doc in docs:
+        ws.append([
+            doc.folio_respuesta or doc.numero_control or "",
+            doc.asunto or "",
+            doc.area_turno_nombre or "",
+            doc.destinatario_nombre or doc.dependencia_destino or "",
+            doc.estado or "",
+            doc.fecha_documento or "",
+            doc.upp_solicitante or "",
+        ])
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        for cell in row:
+            cell.alignment = wrap
+            cell.border = thin
+
+    for col in ws.columns:
+        ws.column_dimensions[col[0].column_letter].width = 20
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+    filename = f"emitidos_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 # ---------- Crear recibido ---------------------------------------------------
 
 @router.post(
@@ -391,6 +495,50 @@ async def crear_recibido(
     Acepta datos pre-llenados por preview-ocr (archivo, OCR, clasificacion).
     """
     _assert_acceso(current_user, data.cliente_id)
+    doc = await crud_documento.crear_recibido(
+        db, obj_in=data, creado_por_id=str(current_user.id)
+    )
+    return await crud_documento.get_with_relations(db, doc.id)
+
+
+# ---------- Registrar memorándum ---------------------------------------------
+
+@router.post(
+    "/memorandum",
+    response_model=DocumentoResponse,
+    status_code=201,
+    summary="Registrar memorándum institucional",
+)
+async def registrar_memorandum(
+    data: DocumentoRecibidoCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    Registra un memorándum institucional proveniente de Secretaría o Subsecretaría de Finanzas.
+
+    Reglas de negocio:
+    - Emisor: siempre Secretaría o Subsecretaría de Finanzas
+    - tipo_memorandum='conocimiento' → estado directo 'de_conocimiento'
+    - tipo_memorandum='requiere_atencion' → estado 'recibido' (flujo normal)
+    - La respuesta va a la dependencia_solicitante, NO al emisor del memo
+    - memorandum_orden_direccion=1 → esta dirección es responsable
+    - memorandum_orden_direccion>1 → solo conocimiento
+    """
+    _assert_acceso(current_user, data.cliente_id)
+
+    # Forzar tipo memorandum y flujo recibido
+    data.tipo = "memorandum"
+
+    # Si orden > 1, forzar conocimiento
+    if data.memorandum_orden_direccion and data.memorandum_orden_direccion > 1:
+        data.tipo_memorandum = "conocimiento"
+        data.requiere_respuesta = False
+
+    # Si tipo_memorandum es conocimiento, forzar no requiere respuesta
+    if data.tipo_memorandum == "conocimiento":
+        data.requiere_respuesta = False
+
     doc = await crud_documento.crear_recibido(
         db, obj_in=data, creado_por_id=str(current_user.id)
     )
@@ -563,7 +711,7 @@ TRANSICIONES_RECIBIDO = {
     "en_atencion": ["respondido", "de_conocimiento"],
     "respondido": ["firmado"],
     "firmado": ["archivado"],
-    "de_conocimiento": ["archivado"],
+    "de_conocimiento": ["en_atencion", "respondido", "archivado"],
     "devuelto": ["en_atencion"],
 }
 
@@ -690,6 +838,52 @@ async def acusar_despacho_lote(
             })
             count += 1
     return MessageResponse(message=f"{count} documento(s) marcado(s) como despachado(s)", success=True)
+
+
+# ---------- Visto Bueno del Subdirector --------------------------------------
+
+@router.post(
+    "/{doc_id}/visto-bueno",
+    response_model=DocumentoResponse,
+    summary="Subdirector registra visto bueno (check de revisión previo a firma)",
+)
+async def registrar_visto_bueno(
+    doc_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    El Subdirector marca que revisó el documento antes de que el Director firme.
+    Es un control de revisión visible en el monitor — NO bloquea la firma.
+    """
+    if current_user.rol not in ("subdirector", "admin_cliente", "superadmin"):
+        raise ForbiddenError("Solo Subdirectores, Director o superadmin pueden dar visto bueno.")
+
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+
+    from datetime import datetime, timezone
+    updated = await crud_documento.update(db, db_obj=doc, obj_in={
+        "visto_bueno_subdirector": True,
+        "visto_bueno_subdirector_id": str(current_user.id),
+        "visto_bueno_subdirector_en": datetime.now(timezone.utc),
+    })
+
+    # Registrar en historial
+    historial = HistorialDocumento(
+        documento_id=doc.id,
+        usuario_id=str(current_user.id),
+        tipo_accion="visto_bueno",
+        estado_anterior=doc.estado,
+        estado_nuevo=doc.estado,  # no cambia estado
+        observaciones=f"Visto bueno registrado por {current_user.nombre_completo}",
+        version=doc.version or 1,
+    )
+    db.add(historial)
+    await db.commit()
+
+    return await crud_documento.get_with_relations(db, updated.id)
 
 
 # ---------- Procesar OCR -----------------------------------------------------
@@ -1563,8 +1757,8 @@ async def devolver_documento(
     Transición: en_atencion/respondido → devuelto (recibidos)
                 en_revision → borrador (emitidos)
     """
-    if current_user.rol not in ("admin_cliente", "superadmin"):
-        raise ForbiddenError("Solo admin o superadmin pueden devolver documentos.")
+    if current_user.rol not in ("admin_cliente", "superadmin", "secretaria"):
+        raise ForbiddenError("Solo el Director, Secretaría o superadmin pueden devolver documentos.")
 
     doc = await crud_documento.get(db, doc_id)
     if not doc:

@@ -112,6 +112,16 @@ _NUEVAS_COLUMNAS_DOC = [
     "ALTER TABLE documentos_oficiales ADD COLUMN acuse_recibido_fecha VARCHAR(100)",
     "ALTER TABLE documentos_oficiales ADD COLUMN acuse_registrado_en DATETIME",
     "ALTER TABLE documentos_oficiales ADD COLUMN acuse_registrado_por_id VARCHAR(36)",
+    # ── Visto Bueno Subdirector ──
+    "ALTER TABLE documentos_oficiales ADD COLUMN visto_bueno_subdirector INTEGER DEFAULT 0",
+    "ALTER TABLE documentos_oficiales ADD COLUMN visto_bueno_subdirector_id VARCHAR(36)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN visto_bueno_subdirector_en DATETIME",
+    # ── Memorándums ──
+    "ALTER TABLE documentos_oficiales ADD COLUMN tipo_memorandum VARCHAR(30)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN dependencia_solicitante VARCHAR(200)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN upp_solicitante_codigo VARCHAR(20)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN documento_origen_id VARCHAR(36)",
+    "ALTER TABLE documentos_oficiales ADD COLUMN memorandum_orden_direccion INTEGER",
 ]
 with sync_engine.connect() as _mc:
     for _stmt in _NUEVAS_COLUMNAS_DOC:
@@ -181,6 +191,7 @@ with sync_engine.connect() as _catc:
 # ── Migración de usuarios (columnas nuevas) ─────────────────────────────────
 _NUEVAS_COLUMNAS_USR = [
     "ALTER TABLE usuarios ADD COLUMN modulos_acceso TEXT DEFAULT '[]'",
+    "ALTER TABLE usuarios ADD COLUMN area_codigo VARCHAR(10)",
 ]
 with sync_engine.connect() as _uc:
     for _stmt in _NUEVAS_COLUMNAS_USR:
@@ -274,31 +285,31 @@ with sync_engine.connect() as conn:
 
     # ── Usuarios de prueba (tabla de permisos Gestión Documental v4) ────────
     _usuarios_gd = [
-        # (email, password, nombre, rol)
-        ("director@pigop.gob.mx", "Dir2026!", "Mtro. Marco Antonio Flores Mejía", "admin_cliente"),
-        ("secretaria@pigop.gob.mx", "Sec2026!", "Berenice Huerta Silva", "secretaria"),
-        ("asesor@pigop.gob.mx", "Ase2026!", "René Emilio Rico García", "asesor"),
-        ("subcep@pigop.gob.mx", "Sub2026!", "Eduardo Cortés Jaramillo", "subdirector"),
-        ("jdcpres@pigop.gob.mx", "Jef2026!", "Blanca Esthela Ortíz Soto", "jefe_depto"),
-        ("jdregej@pigop.gob.mx", "Jef2026!", "Luis Alberto Sánchez León", "jefe_depto"),
-        ("subpyf@pigop.gob.mx", "Sub2026!", "José Luis Pardo Escutia", "subdirector"),
-        ("jdasyp@pigop.gob.mx", "Jef2026!", "Seomara Mendoza Cárdenas", "jefe_depto"),
-        ("jdfyn@pigop.gob.mx", "Jef2026!", "Hugo Díaz Arechiaga", "jefe_depto"),
-        ("auditor@pigop.gob.mx", "Aud2026!", "Auditor SGC", "auditor"),
+        # (email, password, nombre, rol, area_codigo)
+        ("director@pigop.gob.mx", "Dir2026!", "Mtro. Marco Antonio Flores Mejía", "admin_cliente", "DIR"),
+        ("secretaria@pigop.gob.mx", "Sec2026!", "Berenice Huerta Silva", "secretaria", "DIR"),
+        ("asesor@pigop.gob.mx", "Ase2026!", "René Emilio Rico García", "asesor", "DIR"),
+        ("subcep@pigop.gob.mx", "Sub2026!", "Eduardo Cortés Jaramillo", "subdirector", "SCG"),
+        ("jdcpres@pigop.gob.mx", "Jef2026!", "Blanca Esthela Ortíz Soto", "jefe_depto", "DREP"),
+        ("jdregej@pigop.gob.mx", "Jef2026!", "Luis Alberto Sánchez León", "jefe_depto", "DCP"),
+        ("subpyf@pigop.gob.mx", "Sub2026!", "José Luis Pardo Escutia", "subdirector", "SPF"),
+        ("jdasyp@pigop.gob.mx", "Jef2026!", "Seomara Mendoza Cárdenas", "jefe_depto", "DASP"),
+        ("jdfyn@pigop.gob.mx", "Jef2026!", "Hugo Díaz Arechiaga", "jefe_depto", "DFNP"),
+        ("auditor@pigop.gob.mx", "Aud2026!", "Auditor SGC", "auditor", None),
     ]
-    for _em, _pw, _nm, _rl in _usuarios_gd:
+    for _em, _pw, _nm, _rl, _area in _usuarios_gd:
         existing = conn.execute(text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": _em}).fetchone()
         if not existing:
             conn.execute(text(
                 "INSERT INTO usuarios "
-                "(id, email, password_hash, nombre_completo, rol, activo, cliente_id, modulos_acceso) "
-                "VALUES (:id, :email, :pwd, :nombre, :rol, 1, :cid, :modulos)"
+                "(id, email, password_hash, nombre_completo, rol, activo, cliente_id, modulos_acceso, area_codigo) "
+                "VALUES (:id, :email, :pwd, :nombre, :rol, 1, :cid, :modulos, :area)"
             ), {"id": str(uuid.uuid4()), "email": _em, "pwd": get_password_hash(_pw),
-                "nombre": _nm, "rol": _rl, "cid": _dpp_id, "modulos": '["todos"]'})
+                "nombre": _nm, "rol": _rl, "cid": _dpp_id, "modulos": '["todos"]', "area": _area})
         else:
             conn.execute(text(
-                "UPDATE usuarios SET password_hash=:pwd, nombre_completo=:nombre, rol=:rol, cliente_id=:cid WHERE email=:e"
-            ), {"pwd": get_password_hash(_pw), "nombre": _nm, "rol": _rl, "cid": _dpp_id, "e": _em})
+                "UPDATE usuarios SET password_hash=:pwd, nombre_completo=:nombre, rol=:rol, cliente_id=:cid, area_codigo=:area WHERE email=:e"
+            ), {"pwd": get_password_hash(_pw), "nombre": _nm, "rol": _rl, "cid": _dpp_id, "e": _em, "area": _area})
     conn.commit()
     print(f"✅ {len(_usuarios_gd)} usuarios de Gestión Documental creados/actualizados")
 

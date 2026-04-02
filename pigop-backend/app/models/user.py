@@ -45,6 +45,10 @@ class Usuario(Base):
     # superadmin | admin_cliente | secretaria | asesor | subdirector | jefe_depto | analista | auditor | consulta
     rol = Column(String(50), nullable=False, default="analista")
 
+    # Código de área organizacional (e.g. "DIR", "SCG", "DREP", "SPF", "DASP")
+    # Usado para filtrar documentos por estructura organizacional
+    area_codigo = Column(String(10), nullable=True)
+
     # Módulos a los que tiene acceso (JSON array)
     # Posibles: "gestion_documental", "validacion_depp", "certificaciones", "minutas"
     # superadmin y admin_cliente siempre tienen acceso a todo (este campo se ignora para ellos)

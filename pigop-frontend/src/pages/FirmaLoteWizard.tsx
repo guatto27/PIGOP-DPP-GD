@@ -119,7 +119,18 @@ export default function FirmaLoteWizard({ documentos, onClose, onComplete }: Pro
       setResultMessage(result.message)
       setStep(4)
     } catch (e: unknown) {
-      setEjecutarError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Error al ejecutar la firma por lote.')
+      const err = e as { response?: { data?: { detail?: string }, status?: number }, message?: string }
+      const detail = err?.response?.data?.detail
+      const status = err?.response?.status
+      let msg = 'Error al ejecutar la firma por lote.'
+      if (detail) {
+        msg = detail
+      } else if (status === 500) {
+        msg = 'Error interno del servidor. Revise los logs del backend para más detalle.'
+      } else if (err?.message?.includes('Network')) {
+        msg = 'Error de conexión. Verifique que el servidor esté disponible.'
+      }
+      setEjecutarError(msg)
       setStep(4)
     } finally {
       setEjecutando(false)

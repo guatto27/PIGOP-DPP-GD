@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Download, Search, ChevronLeft, ChevronRight, Eye, Mail, FileText, Loader2,
+  Download, Search, ChevronLeft, ChevronRight, Eye, Mail, FileText, Loader2, CheckCircle2,
 } from 'lucide-react'
 import {
   documentosApi,
@@ -347,7 +347,7 @@ export default function ControlOficios() {
   const [exportError, setExportError] = useState('')
 
   // Query documentos recibidos
-  const { data: docs, isLoading } = useQuery({
+  const { data: docsResult, isLoading } = useQuery({
     queryKey: ['oficios-control', fechaDesde, fechaHasta, dependencia, busquedaActiva, skip],
     queryFn: () =>
       documentosApi.list({
@@ -361,7 +361,7 @@ export default function ControlOficios() {
   })
 
   // Total estimado y paginación
-  const items = docs ?? []
+  const items = docsResult?.items ?? []
   const hasMore = items.length === PAGE_SIZE
   const currentPage = Math.floor(skip / PAGE_SIZE) + 1
 
@@ -488,9 +488,10 @@ export default function ControlOficios() {
                   <th className="px-3 py-2.5 text-left font-semibold">No. Oficio</th>
                   <th className="px-3 py-2.5 text-left font-semibold">Asunto</th>
                   <th className="px-3 py-2.5 text-left font-semibold">Remitente</th>
-                  <th className="px-3 py-2.5 text-left font-semibold">Dependencia</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">UPP</th>
                   <th className="px-3 py-2.5 text-left font-semibold">Estado</th>
                   <th className="px-3 py-2.5 text-left font-semibold">Fecha</th>
+                  <th className="px-3 py-2.5 text-center font-semibold">Acuse</th>
                   <th className="px-3 py-2.5 text-center font-semibold">Ver</th>
                 </tr>
               </thead>
@@ -529,6 +530,27 @@ export default function ControlOficios() {
                       </td>
                       <td className="px-3 py-2 text-gray-500 whitespace-nowrap text-xs">
                         {doc.fecha_recibido ?? doc.fecha_documento ?? '—'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {doc.acuse_recibido_url ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); window.open(`/api/v1/documentos/${doc.id}/acuse-recibido/archivo`, '_blank') }}
+                            title={`Acuse: ${doc.acuse_recibido_fecha || 'Ver'}`}
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">
+                            <CheckCircle2 className="w-3 h-3" />
+                            {doc.acuse_recibido_fecha ? doc.acuse_recibido_fecha.slice(0, 10) : 'Ver'}
+                          </button>
+                        ) : !doc.requiere_respuesta || doc.estado === 'de_conocimiento' ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                            N/A
+                          </span>
+                        ) : doc.firmado_digitalmente && doc.despachado ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-600 border border-red-200">
+                            Pendiente
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-gray-300">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <button

@@ -43,6 +43,44 @@ AREAS_DPP = {
              "cargo":   "Jefe del Departamento de Formulación y Normatividad Presupuestal"},
 }
 
+def obtener_iniciales(nombre: str) -> str:
+    """Genera iniciales en mayúscula a partir de un nombre completo.
+    Ejemplo: 'Marco Antonio Flores Mejía' -> 'MAFM'
+    Ignora prefijos honoríficos como Mtro., Lic., etc.
+    """
+    prefijos = {"mtro", "mtra", "lic", "ing", "dr", "dra", "c", "cp", "arq", "prof"}
+    partes = nombre.strip().split()
+    iniciales = []
+    for p in partes:
+        limpio = p.strip(".").lower()
+        if limpio in prefijos:
+            continue
+        if p and p[0].isalpha():
+            iniciales.append(p[0].upper())
+    return "".join(iniciales) if iniciales else "XX"
+
+
+def generar_referencia_oficio(
+    area_codigo: str,
+    referencia_elaboro: str | None = None,
+    referencia_reviso: str | None = None,
+) -> str:
+    """Genera la línea de referencia con iniciales institucionales.
+
+    Formato según jerarquía:
+    - Si participa estructura operativa: DIR / SUBDIRECTOR / JEFE_DEPTO
+    - Si el oficio es directo del Director: DIRECTOR como elaborador
+    - Secretaría: iniciales_secretaria / iniciales_director
+    """
+    dir_info = AREAS_DPP.get("DIR", {})
+    dir_iniciales = obtener_iniciales(dir_info.get("titular", ""))
+
+    elaboro = referencia_elaboro or "???"
+    reviso = referencia_reviso or "???"
+
+    return f"{dir_iniciales}/{elaboro}/{reviso}"
+
+
 # ── Prefijos de folio por área de origen ──────────────────────────────────────
 # Formato institucional: PREFIJO/XXXX/AÑO (4 dígitos consecutivos)
 # Ejemplo: SFA/SF/DPP/SPFP/0001/2026

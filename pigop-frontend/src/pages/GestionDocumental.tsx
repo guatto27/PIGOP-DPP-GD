@@ -34,6 +34,7 @@ import { formatDate, formatDateTime } from '../utils'
 import FirmaLoteWizard from './FirmaLoteWizard'
 import RegistroCertificado from './RegistroCertificado'
 import ControlOficios from './ControlOficios'
+import { useColumnResize } from '../hooks/useColumnResize'
 
 const GUINDA = '#911A3A'
 const TIPOS: TipoDocumento[] = [
@@ -1583,7 +1584,7 @@ function PanelRecibido({
         {([
           'info',
           'ocr',
-          ...(doc.requiere_respuesta !== false && doc.borrador_respuesta ? ['documento'] : []),
+          ...(doc.borrador_respuesta ? ['documento'] : []),
           'historial',
         ] as const).map(t => (
           <button key={t} onClick={() => {
@@ -1609,6 +1610,28 @@ function PanelRecibido({
         {/* ── Tab: Info ─────────────────────────────────────────────────────── */}
         {tab === 'info' && (
           <>
+            {/* Banner memorándum */}
+            {doc.tipo === 'memorandum' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} className="text-amber-600" />
+                  <p className="text-xs font-bold text-amber-800">MEMORÁNDUM INSTITUCIONAL</p>
+                  <span className={clsx('text-[10px] px-2 py-0.5 rounded-full font-medium', doc.tipo_memorandum === 'requiere_atencion' ? 'bg-amber-200 text-amber-800' : 'bg-gray-200 text-gray-600')}>
+                    {doc.tipo_memorandum === 'requiere_atencion' ? 'Requiere atención' : 'Solo conocimiento'}
+                  </span>
+                </div>
+                {doc.dependencia_solicitante && (
+                  <p className="text-[10px] text-amber-700">
+                    <strong>Responder a:</strong> {doc.dependencia_solicitante}
+                    {doc.upp_solicitante_codigo && <span className="text-amber-500 ml-1">(UPP: {doc.upp_solicitante_codigo})</span>}
+                  </p>
+                )}
+                {doc.memorandum_orden_direccion && doc.memorandum_orden_direccion > 1 && (
+                  <p className="text-[10px] text-gray-500">Esta Dirección aparece en posición {doc.memorandum_orden_direccion} — registrado como conocimiento.</p>
+                )}
+              </div>
+            )}
+
             {/* Banner devuelto */}
             {doc.estado === 'devuelto' && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2">
@@ -2570,7 +2593,7 @@ function PanelRecibido({
               <AlertTriangle size={14} className="text-red-500" />
               <span className="text-xs font-medium text-red-600">Devuelto — requiere correcciones antes de firma</span>
             </div>
-          ) : ['en_atencion', 'respondido'].includes(doc.estado) && doc.borrador_respuesta ? (
+          ) : ['en_atencion', 'respondido', 'de_conocimiento'].includes(doc.estado) && doc.borrador_respuesta ? (
             <div className="space-y-2">
               <div className="flex gap-2">
                 {isDirector ? (
@@ -2581,7 +2604,12 @@ function PanelRecibido({
                   </button>
                 ) : (
                   <button onClick={async () => {
-                    try { await documentosApi.cambiarEstado(doc.id, 'respondido' as never); invalidate() } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+                    try {
+                      await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
+                      invalidate()
+                      setToast({ msg: 'Documento enviado correctamente a revisión y firma del Director', type: 'success' })
+                      setTimeout(() => setToast(null), 4000)
+                    } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                   }}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
                     style={{ backgroundColor: GUINDA }}>
@@ -2589,11 +2617,26 @@ function PanelRecibido({
                   </button>
                 )}
               </div>
-              {isDirector && (
+              {(isDirector || isSecretaria) && (
                 <button onClick={() => { setObservacionesDevolucion(''); setShowDevolucionModal(true) }}
                   className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium bg-red-50 border border-red-300 text-red-700 hover:bg-red-100 transition-colors">
                   <AlertTriangle size={12} /> Devolver para correcciones
                 </button>
+              )}
+              {/* Visto Bueno del Subdirector */}
+              {user?.rol === 'subdirector' && !doc.visto_bueno_subdirector && (
+                <button onClick={async () => {
+                  try { await documentosApi.registrarVistoBueno(doc.id); invalidate() } catch (e) { window.alert('Error: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+                }}
+                  className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium bg-green-50 border border-green-300 text-green-700 hover:bg-green-100 transition-colors">
+                  <CheckCircle2 size={12} /> Dar Visto Bueno
+                </button>
+              )}
+              {doc.visto_bueno_subdirector && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg">
+                  <CheckCircle2 size={12} className="text-green-600" />
+                  <span className="text-[10px] text-green-700 font-medium">Visto Bueno del Subdirector registrado</span>
+                </div>
               )}
             </div>
           ) : doc.estado === 'en_atencion' && !doc.borrador_respuesta ? (
@@ -3925,13 +3968,15 @@ function ModalEditarRegistro({ doc, onClose, onSaved }: {
 export default function GestionDocumental() {
   const { user } = useAuth()
   const qc = useQueryClient()
-  const [tab, setTab] = useState<'recibidos' | 'emitidos' | 'oficios'>('recibidos')
+  const [tab, setTab] = useState<'recibidos' | 'emitidos' | 'oficios' | 'memorandums'>('recibidos')
   const [busqueda, setBusqueda] = useState('')
   const [busquedaDebounced, setBusquedaDebounced] = useState('')
   const [filtroEstado, setFiltroEstado] = useState('')
   const [filtroArea, setFiltroArea] = useState('')
   const [fechaDesde, setFechaDesde] = useState('')
   const [fechaHasta, setFechaHasta] = useState('')
+  const [fechaDesdeDebounced, setFechaDesdeDebounced] = useState('')
+  const [fechaHastaDebounced, setFechaHastaDebounced] = useState('')
   const [showDateFilters, setShowDateFilters] = useState(false)
   const [showModalRecibido, setShowModalRecibido] = useState(false)
   const [showModalEmitido, setShowModalEmitido] = useState(false)
@@ -3944,6 +3989,10 @@ export default function GestionDocumental() {
   const [showFirmaLote, setShowFirmaLote] = useState(false)
   // Certificado e.firma
   const [showCertModal, setShowCertModal] = useState(false)
+  // Modal memorándum
+  const [showMemoModal, setShowMemoModal] = useState(false)
+  // Toast de confirmación
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
   // Roles
   const isDirector = user?.rol === 'admin_cliente' || user?.rol === 'superadmin'
   const isSecretaria = user?.rol === 'secretaria'
@@ -3955,19 +4004,54 @@ export default function GestionDocumental() {
     return () => clearTimeout(timer)
   }, [busqueda])
 
+  // Debounce de fechas (500ms) — evita refetch en cada keystroke del date picker
+  useEffect(() => {
+    const timer = setTimeout(() => setFechaDesdeDebounced(fechaDesde), 500)
+    return () => clearTimeout(timer)
+  }, [fechaDesde])
+  useEffect(() => {
+    const timer = setTimeout(() => setFechaHastaDebounced(fechaHasta), 500)
+    return () => clearTimeout(timer)
+  }, [fechaHasta])
+
+  // Paginación
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(15)
+
   const params = {
-    flujo:      tab === 'recibidos' ? 'recibido' : 'emitido',
+    flujo:      tab === 'memorandums' ? 'recibido' : tab === 'recibidos' ? 'recibido' : 'emitido',
+    tipo:       tab === 'memorandums' ? 'memorandum' as string : undefined,
     busqueda:   busquedaDebounced || undefined,
     estado:     filtroEstado || undefined,
     area_turno: filtroArea || undefined,
-    fecha_desde: fechaDesde || undefined,
-    fecha_hasta: fechaHasta || undefined,
+    fecha_desde: fechaDesdeDebounced || undefined,
+    fecha_hasta: fechaHastaDebounced || undefined,
+    skip:  page * pageSize,
+    limit: pageSize,
   }
 
-  const { data: docs, isLoading, refetch } = useQuery({
+  const { data: queryResult, isLoading, refetch } = useQuery({
     queryKey: ['documentos', params],
     queryFn:  () => documentosApi.list(params),
   })
+  const docs = queryResult?.items
+  const totalDocs = queryResult?.total ?? 0
+  const totalPages = Math.ceil(totalDocs / pageSize)
+
+  // Reset page cuando cambian filtros
+  useEffect(() => { setPage(0) }, [tab, busquedaDebounced, filtroEstado, filtroArea, fechaDesdeDebounced, fechaHastaDebounced, pageSize])
+
+  // Columnas redimensionables
+  const { widths: colW, onMouseDown: onColResize } = useColumnResize('recibidos', [
+    { key: 'oficio', defaultWidth: 130, minWidth: 80 },
+    { key: 'asunto', defaultWidth: 220, minWidth: 120 },
+    { key: 'remitente', defaultWidth: 130, minWidth: 80 },
+    { key: 'area', defaultWidth: 110, minWidth: 60 },
+    { key: 'upp', defaultWidth: 80, minWidth: 50 },
+    { key: 'estado', defaultWidth: 100, minWidth: 70 },
+    { key: 'atencion', defaultWidth: 90, minWidth: 60 },
+    { key: 'fecha', defaultWidth: 90, minWidth: 60 },
+  ])
 
   const { data: areas = [] } = useQuery({
     queryKey: ['areas-dpp'],
@@ -4005,7 +4089,18 @@ export default function GestionDocumental() {
   if (isLoading) return <PageSpinner />
 
   return (
-    <div className="flex h-full bg-gray-50">
+    <div className="flex h-full bg-gray-50 relative">
+      {/* Toast de confirmación */}
+      {toast && (
+        <div className={clsx(
+          'fixed top-4 right-4 z-[60] flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-xs font-medium animate-in fade-in slide-in-from-top-2',
+          toast.type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white',
+        )}>
+          {toast.type === 'success' ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+          {toast.msg}
+          <button onClick={() => setToast(null)} className="ml-2 opacity-70 hover:opacity-100"><X size={12} /></button>
+        </div>
+      )}
       {/* ── Panel izquierdo (lista) — oculto cuando hay detalle seleccionado */}
       <div className={clsx('flex flex-col', selectedId ? 'hidden' : 'flex-1')}>
 
@@ -4032,6 +4127,8 @@ export default function GestionDocumental() {
                       ? 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
                       : tieneCert && certProximoVencer
                       ? 'border-yellow-200 bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
+                      : tieneCert && !certVigente
+                      ? 'border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100'
                       : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100',
                   )}
                   title={tieneCert ? 'Ver certificado e.firma' : 'Registrar certificado e.firma'}>
@@ -4040,6 +4137,8 @@ export default function GestionDocumental() {
                     ? 'e.firma vigente'
                     : tieneCert && certProximoVencer
                     ? 'e.firma por vencer'
+                    : tieneCert && !certVigente
+                    ? 'e.firma vencida'
                     : 'e.firma no configurada'}
                 </button>
               )}
@@ -4077,7 +4176,7 @@ export default function GestionDocumental() {
 
           {/* Tabs */}
           <div className="flex gap-0">
-            {([['recibidos', 'Correspondencia recibida', InboxIcon], ['emitidos', 'Documentos emitidos', SendIcon], ['oficios', 'Control de Oficios', Mail]] as const).map(([key, label, Icon]) => (
+            {([['recibidos', 'Correspondencia recibida', InboxIcon], ['emitidos', 'Documentos emitidos', SendIcon], ['memorandums', 'MEMORANDUMS', FileText], ['oficios', 'Control de Oficios', Mail]] as const).map(([key, label, Icon]) => (
               <button key={key}
                 onClick={() => { setTab(key); setSelectedId(null); setFiltroEstado(''); setFiltroArea('') }}
                 className={clsx(
@@ -4095,7 +4194,145 @@ export default function GestionDocumental() {
           <div className="flex-1 overflow-y-auto p-4">
             <ControlOficios />
           </div>
-        ) : (<>
+        ) : tab === 'memorandums' ? (<>
+          {/* ── Tab: MEMORANDUMS ── */}
+          {/* Métricas memorándums */}
+          <div className="px-4 py-2 bg-white border-b border-gray-100 space-y-2">
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { label: 'Recibidos',        val: docs?.filter(d => d.estado === 'recibido').length ?? 0,        color: '#3b82f6' },
+                { label: 'Req. atención',    val: docs?.filter(d => d.tipo_memorandum === 'requiere_atencion').length ?? 0, color: '#f59e0b' },
+                { label: 'Conocimiento',     val: docs?.filter(d => d.tipo_memorandum === 'conocimiento' || d.estado === 'de_conocimiento').length ?? 0, color: '#6b7280' },
+                { label: 'En atención',      val: docs?.filter(d => d.estado === 'en_atencion').length ?? 0,     color: '#a855f7' },
+                { label: 'Respondidos',      val: docs?.filter(d => ['respondido', 'firmado'].includes(d.estado)).length ?? 0, color: '#10b981' },
+              ].map(({ label, val, color }) => (
+                <div key={label} className="text-center">
+                  <p className="text-lg font-bold" style={{ color }}>{val}</p>
+                  <p className="text-[9px] text-gray-500 leading-tight">{label}</p>
+                </div>
+              ))}
+            </div>
+            {(isSecretaria || isDirector) && (
+              <button onClick={() => setShowMemoModal(true)}
+                className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white transition-colors hover:opacity-90"
+                style={{ backgroundColor: '#911A3A' }}>
+                <Plus size={12} /> Registrar memorándum
+              </button>
+            )}
+          </div>
+
+          {/* Filtros memorándums */}
+          <div className="px-4 py-2 bg-white border-b border-gray-100">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-1"
+                  style={{ '--tw-ring-color': '#911A3A' } as React.CSSProperties}
+                  placeholder="Buscar memorándums..."
+                  value={busqueda} onChange={e => setBusqueda(e.target.value)} />
+              </div>
+              <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPage(0) }}
+                className="text-xs border border-gray-300 rounded-lg px-2 py-1.5">
+                <option value="">Todos los estados</option>
+                <option value="recibido">Recibido</option>
+                <option value="turnado">Turnado</option>
+                <option value="en_atencion">En atención</option>
+                <option value="respondido">Respondido</option>
+                <option value="firmado">Firmado</option>
+                <option value="de_conocimiento">Conocimiento</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Tabla memorándums */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
+                <thead>
+                  <tr className="text-white" style={{ backgroundColor: '#911A3A' }}>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 120 }}>No. Memo</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 200 }}>Asunto</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 130 }}>Emisor</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 130 }}>UPP Solicitante</th>
+                    <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 100 }}>Tipo</th>
+                    <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 90 }}>Estado</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 80 }}>Fecha</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {docs?.map(doc => {
+                    const cfg = ESTADO_RECIBIDO_CONFIG[doc.estado as keyof typeof ESTADO_RECIBIDO_CONFIG]
+                    return (
+                      <tr key={doc.id}
+                        onClick={() => setSelectedId(doc.id === selectedId ? null : doc.id)}
+                        className={clsx('cursor-pointer transition-colors', doc.id === selectedId ? 'bg-[#FDF8F9]' : 'hover:bg-gray-50')}>
+                        <td className="px-3 py-2.5">
+                          <span className="font-mono text-[10px] text-gray-600 truncate block">{doc.numero_oficio_origen || '—'}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-xs font-medium text-gray-900 truncate leading-tight">{doc.asunto}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-[10px] text-gray-600 truncate">{doc.remitente_dependencia || doc.remitente_nombre || '—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-[10px] text-gray-600 truncate">{doc.dependencia_solicitante || doc.upp_solicitante || '—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {doc.tipo_memorandum === 'requiere_atencion' ? (
+                            <span className="inline-flex items-center text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                              Req. atención
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center text-[10px] px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500 border border-gray-200">
+                              Conocimiento
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {cfg && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
+                              style={{ backgroundColor: cfg.bg, color: cfg.color }}>
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: cfg.dot }} />
+                              {cfg.label}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="text-[10px] text-gray-400 whitespace-nowrap">{doc.fecha_recibido ? formatDate(doc.fecha_recibido) : doc.creado_en ? formatDate(doc.creado_en) : '—'}</span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {/* Paginación */}
+              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500">Mostrar</span>
+                  <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                    className="text-[10px] border border-gray-300 rounded px-1.5 py-0.5 bg-white">
+                    <option value={5}>5</option><option value={10}>10</option><option value={15}>15</option><option value={25}>25</option>
+                  </select>
+                  <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
+                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
+                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let p: number
+                      if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
+                      return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
+                    })}
+                    <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
+                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>) : (<>
 
         {/* Métricas rápidas */}
         {tab === 'recibidos' ? (
@@ -4115,17 +4352,37 @@ export default function GestionDocumental() {
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-2 px-4 py-2 bg-white border-b border-gray-100">
-            {[
-              { label: 'Borradores',  val: porEstado('borrador'),    color: '#d97706' },
-              { label: 'En revisión', val: porEstado('en_revision'), color: '#a855f7' },
-              { label: 'Vigentes',    val: porEstado('vigente'),     color: '#10b981' },
-            ].map(({ label, val, color }) => (
-              <div key={label} className="text-center">
-                <p className="text-lg font-bold" style={{ color }}>{val}</p>
-                <p className="text-[9px] text-gray-500 leading-tight">{label}</p>
-              </div>
-            ))}
+          <div className="px-4 py-2 bg-white border-b border-gray-100 space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Borradores',  val: porEstado('borrador'),    color: '#d97706' },
+                { label: 'En revisión', val: porEstado('en_revision'), color: '#a855f7' },
+                { label: 'Vigentes',    val: porEstado('vigente'),     color: '#10b981' },
+              ].map(({ label, val, color }) => (
+                <div key={label} className="text-center">
+                  <p className="text-lg font-bold" style={{ color }}>{val}</p>
+                  <p className="text-[9px] text-gray-500 leading-tight">{label}</p>
+                </div>
+              ))}
+            </div>
+            <button onClick={async () => {
+              const token = localStorage.getItem('access_token')
+              const base = (documentosApi as any).__baseUrl || '/api/v1'
+              try {
+                const res = await fetch(`${window.location.origin}/api/v1/documentos/export-emitidos`, {
+                  headers: { Authorization: `Bearer ${token}` },
+                })
+                if (!res.ok) throw new Error('Error al exportar')
+                const blob = await res.blob()
+                const a = document.createElement('a')
+                a.href = URL.createObjectURL(blob)
+                a.download = `emitidos_${new Date().toISOString().slice(0, 10)}.xlsx`
+                a.click()
+              } catch { window.alert('Error al exportar a Excel') }
+            }}
+              className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg font-medium border border-green-300 text-green-700 hover:bg-green-50 transition-colors">
+              <Download size={10} /> Exportar a Excel
+            </button>
           </div>
         )}
 
@@ -4150,7 +4407,9 @@ export default function GestionDocumental() {
                     if (!window.confirm(`¿Marcar ${firmadosSinDespachar.length} documento(s) como despachado(s)?`)) return
                     try {
                       await documentosApi.acusarDespachoLote(firmadosSinDespachar.map(d => d.id))
+                      qc.invalidateQueries({ queryKey: ['documentos'] })
                       refetch()
+                      setFiltroEstado('')
                     } catch {}
                   }}
                     className="text-[10px] px-2 py-1 rounded font-medium text-white bg-emerald-600 hover:bg-emerald-700">
@@ -4178,6 +4437,19 @@ export default function GestionDocumental() {
                   className="w-full flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-left hover:bg-blue-100 transition-colors">
                   <BookOpen size={14} className="text-blue-600 flex-shrink-0" />
                   <span className="text-xs font-medium text-blue-700">{turnadosConocimiento.length} oficio{turnadosConocimiento.length !== 1 ? 's' : ''} turnado{turnadosConocimiento.length !== 1 ? 's' : ''} para conocimiento</span>
+                </button>
+              )
+            })()}
+
+            {/* Alerta subdirectores: pendientes de visto bueno */}
+            {(() => {
+              const pendientesVB = docs?.filter(d => d.estado === 'respondido' && !d.visto_bueno_subdirector) ?? []
+              if (user?.rol !== 'subdirector' || pendientesVB.length === 0) return null
+              return (
+                <button onClick={() => setFiltroEstado('respondido')}
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-left hover:bg-amber-100 transition-colors">
+                  <CheckCircle2 size={14} className="text-amber-600 flex-shrink-0" />
+                  <span className="text-xs font-medium text-amber-700">{pendientesVB.length} documento{pendientesVB.length !== 1 ? 's' : ''} pendiente{pendientesVB.length !== 1 ? 's' : ''} de Visto Bueno</span>
                 </button>
               )
             })()}
@@ -4319,19 +4591,29 @@ export default function GestionDocumental() {
 
               {/* Tabla funcional de recibidos */}
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <table className="w-full text-xs">
+                <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
                   <thead>
-                    <tr className="bg-gray-50 border-b border-gray-100">
-                      {multiSelectMode && <th className="px-2 py-2 w-8" />}
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">No. Oficio</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Asunto</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Remitente</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Area</th>
-                      <th className="px-3 py-2 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Estado</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Atención</th>
-                      <th className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Fecha</th>
+                    <tr className="text-white" style={{ backgroundColor: '#911A3A' }}>
+                      {multiSelectMode && <th className="px-2 py-2.5 w-8" />}
+                      {([
+                        ['oficio', 'No. Oficio', 'left'],
+                        ['asunto', 'Asunto', 'left'],
+                        ['remitente', 'Remitente', 'left'],
+                        ['area', 'Area', 'left'],
+                        ['upp', 'UPP', 'left'],
+                        ['estado', 'Estado', 'center'],
+                        ['atencion', 'Atención', 'left'],
+                        ['fecha', 'Fecha', 'left'],
+                      ] as const).map(([key, label, align]) => (
+                        <th key={key} className={`px-3 py-2.5 text-${align} text-xs font-semibold relative`}
+                          style={{ width: colW[key], minWidth: 50 }}>
+                          {label}
+                          <div className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-white/30 active:bg-white/50"
+                            onMouseDown={e => onColResize(key, e)} />
+                        </th>
+                      ))}
                       {(user?.rol === 'secretaria' || user?.rol === 'superadmin') && (
-                        <th className="px-3 py-2 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Acciones</th>
+                        <th className="px-3 py-2.5 text-center text-xs font-semibold">Acciones</th>
                       )}
                     </tr>
                   </thead>
@@ -4393,14 +4675,24 @@ export default function GestionDocumental() {
                               {doc.area_turno_nombre ? doc.area_turno_nombre.replace(/^(Departamento|Subdirección|Dirección)\s+de\s+/i, '') : '—'}
                             </p>
                           </td>
+                          <td className="px-3 py-2.5">
+                            <p className="text-[10px] text-gray-400 truncate max-w-[80px]">{doc.upp_solicitante || '—'}</p>
+                          </td>
                           <td className="px-3 py-2.5 text-center">
-                            {cfg && (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
-                                style={{ backgroundColor: cfg.bg, color: cfg.color }}>
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: cfg.dot }} />
-                                {cfg.label}
-                              </span>
-                            )}
+                            <div className="flex items-center justify-center gap-1">
+                              {cfg && (
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
+                                  style={{ backgroundColor: cfg.bg, color: cfg.color }}>
+                                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: cfg.dot }} />
+                                  {cfg.label}
+                                </span>
+                              )}
+                              {doc.visto_bueno_subdirector && (
+                                <span className="inline-flex items-center text-[9px] text-green-600" title="Visto bueno del Subdirector">
+                                  <CheckCircle2 size={12} />
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2.5">
                             <SemaforoAtencion fecha={doc.fecha_limite} estado={doc.estado} />
@@ -4442,8 +4734,41 @@ export default function GestionDocumental() {
                     })}
                   </tbody>
                 </table>
-                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
-                  <p className="text-[10px] text-gray-500">{docs.length} documento{docs.length !== 1 ? 's' : ''}</p>
+                {/* Paginación */}
+                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-gray-500">Mostrar</span>
+                    <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                      className="text-[10px] border border-gray-300 rounded px-1.5 py-0.5 bg-white">
+                      <option value={5}>5</option>
+                      <option value={10}>10</option>
+                      <option value={15}>15</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                    <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                  </div>
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
+                        className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
+                      {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                        let p: number
+                        if (totalPages <= 7) { p = i }
+                        else if (page < 3) { p = i }
+                        else if (page > totalPages - 4) { p = totalPages - 7 + i }
+                        else { p = page - 3 + i }
+                        return (
+                          <button key={p} onClick={() => setPage(p)}
+                            className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>
+                            {p + 1}
+                          </button>
+                        )
+                      })}
+                      <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
+                        className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -4468,37 +4793,101 @@ export default function GestionDocumental() {
               )}
             </>
           ) : (
-            /* Tabla simple para emitidos */
+            /* Tabla completa para emitidos */
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="grid grid-cols-[auto_1fr_auto_auto] gap-4 px-4 py-2 bg-gray-50 border-b border-gray-100">
-                {['', 'DOCUMENTO', 'FECHA', 'ESTADO'].map(h => (
-                  <p key={h} className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">{h}</p>
-                ))}
-              </div>
-              {docs.map(doc => {
-                const cfg = ESTADO_EMITIDO_CONFIG[doc.estado as keyof typeof ESTADO_EMITIDO_CONFIG]
-                return (
-                  <div key={doc.id}
-                    onClick={() => setSelectedId(doc.id === selectedId ? null : doc.id)}
-                    className={clsx(
-                      'grid grid-cols-[auto_1fr_auto_auto] gap-4 px-4 py-3 border-b border-gray-50 cursor-pointer transition-colors items-center',
-                      doc.id === selectedId ? 'bg-[#FDF8F9]' : 'hover:bg-gray-50',
-                    )}>
-                    <span className="text-base">{TIPO_ICONS[doc.tipo]}</span>
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-900 truncate">{doc.asunto}</p>
-                      <p className="text-[10px] text-gray-400 truncate">{doc.numero_control || doc.dependencia_destino || '—'}</p>
-                    </div>
-                    <p className="text-xs text-gray-500">{doc.fecha_documento ? formatDate(doc.fecha_documento) : '—'}</p>
-                    {cfg && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full font-medium"
-                        style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>
-                    )}
+              <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
+                <thead>
+                  <tr className="text-white" style={{ backgroundColor: '#911A3A' }}>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 130 }}>No. Oficio</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 200 }}>Asunto</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 120 }}>Área</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 130 }}>Destinatario</th>
+                    <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 90 }}>Estado</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 80 }}>Fecha</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 70 }}>UPP</th>
+                    <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 90 }}>Acuse</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {docs?.map(doc => {
+                    const cfg = ESTADO_EMITIDO_CONFIG[doc.estado as keyof typeof ESTADO_EMITIDO_CONFIG]
+                    return (
+                      <tr key={doc.id}
+                        onClick={() => setSelectedId(doc.id === selectedId ? null : doc.id)}
+                        className={clsx('cursor-pointer transition-colors', doc.id === selectedId ? 'bg-[#FDF8F9]' : 'hover:bg-gray-50')}>
+                        <td className="px-3 py-2.5">
+                          <span className="font-mono text-[10px] text-gray-600 truncate block max-w-[120px]">
+                            {doc.folio_respuesta || doc.numero_control || '—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-xs font-medium text-gray-900 truncate leading-tight">{doc.asunto}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-[10px] text-gray-500 truncate">{doc.area_turno_nombre ? doc.area_turno_nombre.replace(/^(Departamento|Subdirección|Dirección)\s+de\s+/i, '') : '—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-[10px] text-gray-600 truncate">{doc.destinatario_nombre || doc.dependencia_destino || '—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {cfg && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
+                              style={{ backgroundColor: cfg.bg, color: cfg.color }}>
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: cfg.dot }} />
+                              {cfg.label}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="text-[10px] text-gray-400 whitespace-nowrap">{doc.fecha_documento ? formatDate(doc.fecha_documento) : doc.creado_en ? formatDate(doc.creado_en) : '—'}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-[10px] text-gray-400 truncate">{doc.upp_solicitante || '—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {doc.acuse_recibido_url ? (
+                            <button onClick={(e) => { e.stopPropagation(); window.open(`/api/v1/documentos/${doc.id}/acuse-recibido/archivo`, '_blank') }}
+                              title={`Acuse: ${doc.acuse_recibido_fecha || 'Ver'}`}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">
+                              <CheckCircle2 size={10} />
+                              {doc.acuse_recibido_fecha ? doc.acuse_recibido_fecha.slice(0, 10) : 'Ver'}
+                            </button>
+                          ) : doc.estado === 'vigente' || doc.firmado_digitalmente ? (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-600 border border-red-200">
+                              Pendiente
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-gray-300">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {/* Paginación emitidos */}
+              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500">Mostrar</span>
+                  <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
+                    className="text-[10px] border border-gray-300 rounded px-1.5 py-0.5 bg-white">
+                    <option value={5}>5</option><option value={10}>10</option><option value={15}>15</option><option value={25}>25</option>
+                  </select>
+                  <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
+                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
+                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let p: number
+                      if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
+                      return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
+                    })}
+                    <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
+                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
                   </div>
-                )
-              })}
-              <div className="px-4 py-2 bg-gray-50">
-                <p className="text-[10px] text-gray-500">{docs.length} documento{docs.length !== 1 ? 's' : ''}</p>
+                )}
               </div>
             </div>
           )}
@@ -4567,6 +4956,305 @@ export default function GestionDocumental() {
           onClose={() => setShowCertModal(false)}
         />
       )}
+
+      {/* ── Modal: Registrar Memorándum ── */}
+      {showMemoModal && (
+        <RegistroMemorandumModal
+          clienteId={user?.cliente_id ?? ''}
+          onClose={() => setShowMemoModal(false)}
+          onSaved={() => { setShowMemoModal(false); qc.invalidateQueries({ queryKey: ['documentos'] }); refetch() }}
+        />
+      )}
+    </div>
+  )
+}
+
+
+// ── Modal de registro de memorándum ──────────────────────────────────────────
+
+function RegistroMemorandumModal({ clienteId, onClose, onSaved }: {
+  clienteId: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  // OCR / archivo
+  const [step, setStep] = useState<'upload' | 'processing' | 'form'>('upload')
+  const [ocrResult, setOcrResult] = useState<PreviewOCRResult | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [fileUrl, setFileUrl] = useState('')
+  const [fileMime, setFileMime] = useState('')
+
+  // Campos del formulario
+  const [emisor, setEmisor] = useState('Secretaría de Finanzas y Administración')
+  const [numeroMemo, setNumeroMemo] = useState('')
+  const [fechaMemo, setFechaMemo] = useState(new Date().toISOString().slice(0, 10))
+  const [asunto, setAsunto] = useState('')
+  const [tipoMemo, setTipoMemo] = useState<'requiere_atencion' | 'conocimiento'>('requiere_atencion')
+  const [depSolicitante, setDepSolicitante] = useState('')
+  const [uppSolicitanteCodigo, setUppSolicitanteCodigo] = useState('')
+  const [ordenDireccion, setOrdenDireccion] = useState(1)
+  const [prioridad, setPrioridad] = useState('normal')
+  const [descripcion, setDescripcion] = useState('')
+
+  // Autocompletado UPP
+  const [uppSearch, setUppSearch] = useState('')
+  const { data: uppSugerencias } = useQuery({
+    queryKey: ['upps-memo', uppSearch],
+    queryFn: () => catalogoApi.buscarUpps(uppSearch),
+    enabled: uppSearch.length >= 2,
+  })
+
+  // Procesar archivo con OCR
+  const handleFile = async (file: File) => {
+    setFileName(file.name)
+    setError('')
+    setStep('processing')
+    try {
+      const result = await documentosApi.previewOCR(file)
+      setOcrResult(result)
+      // Pre-llenar con datos extraídos
+      const d = result.datos_extraidos
+      if (d.asunto) setAsunto(d.asunto as string)
+      if (d.numero_oficio) setNumeroMemo(d.numero_oficio as string)
+      if (d.fecha_documento) setFechaMemo(d.fecha_documento as string)
+      if (d.remitente_dependencia) setEmisor(d.remitente_dependencia as string)
+      // Guardar referencia al archivo pre-procesado
+      if (result.archivo_url) setFileUrl(result.archivo_url)
+      if (result.archivo_nombre) setFileName(result.archivo_nombre)
+      if (result.archivo_mime) setFileMime(result.archivo_mime)
+      setStep('form')
+    } catch (e: unknown) {
+      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Error al procesar archivo')
+      setStep('upload')
+    }
+  }
+
+  const handleSave = async () => {
+    if (!asunto.trim()) return setError('El asunto es obligatorio')
+    setSaving(true)
+    setError('')
+    try {
+      await documentosApi.registrarMemorandum({
+        cliente_id: clienteId,
+        tipo: 'memorandum',
+        asunto: asunto.trim(),
+        numero_oficio_origen: numeroMemo.trim() || undefined,
+        remitente_nombre: emisor,
+        remitente_dependencia: emisor,
+        fecha_documento: fechaMemo,
+        fecha_recibido: new Date().toISOString().slice(0, 10),
+        prioridad,
+        descripcion: descripcion || undefined,
+        requiere_respuesta: tipoMemo === 'requiere_atencion',
+        tipo_memorandum: tipoMemo,
+        dependencia_solicitante: depSolicitante || undefined,
+        upp_solicitante_codigo: uppSolicitanteCodigo || undefined,
+        memorandum_orden_direccion: ordenDireccion,
+        // Datos del archivo OCR pre-procesado
+        ...(fileUrl ? { nombre_archivo: fileName, url_storage: fileUrl, mime_type: fileMime } : {}),
+        ...(ocrResult ? {
+          datos_extraidos_ia: ocrResult.datos_extraidos,
+          ocr_procesado: true,
+          sugerencia_area_codigo: ocrResult.clasificacion?.area_codigo,
+          sugerencia_area_nombre: ocrResult.clasificacion?.area_nombre,
+          sugerencia_fundamento: ocrResult.clasificacion?.fundamento,
+          sugerencia_plazo_dias: ocrResult.clasificacion?.plazo_dias,
+          confianza_clasificacion: ocrResult.clasificacion?.confianza,
+        } : {}),
+      })
+      onSaved()
+    } catch (e: unknown) {
+      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Error al registrar memorándum')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b" style={{ borderColor: '#911A3A20' }}>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FDF2F4' }}>
+              <FileText size={14} style={{ color: '#911A3A' }} />
+            </div>
+            <h2 className="text-sm font-bold text-gray-900">Registrar Memorándum</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+
+          {/* Paso 1: Carga de archivo */}
+          {step === 'upload' && (
+            <div className="space-y-3">
+              <p className="text-xs text-gray-600">Sube el PDF o foto del memorándum para extraer datos automáticamente, o llena el formulario manualmente.</p>
+              <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff,image/*" className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
+              <button onClick={() => fileRef.current?.click()}
+                className="w-full flex flex-col items-center gap-2 border-2 border-dashed border-gray-300 rounded-xl py-6 hover:border-[#911A3A] hover:bg-[#FDF2F4] transition-colors cursor-pointer">
+                <Upload size={24} className="text-gray-400" />
+                <span className="text-xs text-gray-600 font-medium">Subir PDF o imagen del memorándum</span>
+                <span className="text-[10px] text-gray-400">PDF, JPG, PNG, TIFF</span>
+              </button>
+              <button onClick={() => setStep('form')}
+                className="w-full text-center text-xs text-gray-500 hover:text-[#911A3A] py-1">
+                O llenar formulario manualmente
+              </button>
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                  <AlertTriangle size={12} className="inline mr-1" /> {error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Paso 2: Procesando OCR */}
+          {step === 'processing' && (
+            <div className="flex flex-col items-center justify-center py-8">
+              <RotateCcw size={28} className="animate-spin mb-3" style={{ color: '#911A3A' }} />
+              <p className="text-xs font-medium text-gray-700">Procesando {fileName}...</p>
+              <p className="text-[10px] text-gray-400 mt-1">Extrayendo datos con IA</p>
+            </div>
+          )}
+
+          {/* Paso 3: Formulario (con o sin datos OCR) */}
+          {step === 'form' && (<>
+
+          {/* Indicador de archivo cargado */}
+          {ocrResult && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
+              <CheckCircle2 size={12} className="text-green-600" />
+              <span className="text-[10px] text-green-700 font-medium">Datos extraídos de: {fileName}</span>
+              <button onClick={() => { setOcrResult(null); setStep('upload'); setFileUrl(''); setFileName('') }}
+                className="ml-auto text-[10px] text-gray-400 hover:text-red-500">Cambiar archivo</button>
+            </div>
+          )}
+
+          {/* Emisor */}
+          <div>
+            <label className="text-[10px] font-medium text-gray-700 mb-1 block">Emisor</label>
+            <select value={emisor} onChange={e => setEmisor(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2">
+              <option>Secretaría de Finanzas y Administración</option>
+              <option>Subsecretaría de Finanzas</option>
+              <option>Secretaría Particular</option>
+            </select>
+          </div>
+
+          {/* No. memo + Fecha */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-medium text-gray-700 mb-1 block">No. de memorándum</label>
+              <input value={numeroMemo} onChange={e => setNumeroMemo(e.target.value)}
+                className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2" placeholder="MEMO/SFA/001/2026" />
+            </div>
+            <div>
+              <label className="text-[10px] font-medium text-gray-700 mb-1 block">Fecha</label>
+              <input type="date" value={fechaMemo} onChange={e => setFechaMemo(e.target.value)}
+                className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2" />
+            </div>
+          </div>
+
+          {/* Asunto */}
+          <div>
+            <label className="text-[10px] font-medium text-gray-700 mb-1 block">Asunto *</label>
+            <input value={asunto} onChange={e => setAsunto(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2" placeholder="Asunto del memorándum" />
+          </div>
+
+          {/* Tipo memo + Prioridad */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-medium text-gray-700 mb-1 block">Tipo de memorándum</label>
+              <select value={tipoMemo} onChange={e => setTipoMemo(e.target.value as 'requiere_atencion' | 'conocimiento')}
+                className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2">
+                <option value="requiere_atencion">Requiere atención</option>
+                <option value="conocimiento">Solo conocimiento</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-medium text-gray-700 mb-1 block">Prioridad</label>
+              <select value={prioridad} onChange={e => setPrioridad(e.target.value)}
+                className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2">
+                <option value="normal">Normal</option>
+                <option value="alta">Alta</option>
+                <option value="urgente">Urgente</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Dependencia/UPP solicitante */}
+          <div>
+            <label className="text-[10px] font-medium text-gray-700 mb-1 block">Dependencia / UPP solicitante (a quien se responde)</label>
+            <input value={uppSearch || depSolicitante} onChange={e => { setUppSearch(e.target.value); setDepSolicitante(e.target.value) }}
+              className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2" placeholder="Buscar dependencia o UPP..." />
+            {uppSugerencias && uppSugerencias.length > 0 && uppSearch.length >= 2 && (
+              <div className="mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-32 overflow-y-auto">
+                {uppSugerencias.map((u: { codigo_upp: string; nombre_upp: string }) => (
+                  <button key={u.codigo_upp} onClick={() => {
+                    setDepSolicitante(u.nombre_upp)
+                    setUppSolicitanteCodigo(u.codigo_upp)
+                    setUppSearch('')
+                  }}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 border-b border-gray-50">
+                    <span className="font-mono text-[10px] text-gray-400">{u.codigo_upp}</span> {u.nombre_upp}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Orden de dirección (multi-dirección) */}
+          <div>
+            <label className="text-[10px] font-medium text-gray-700 mb-1 block">Posición de esta Dirección en el memorándum</label>
+            <div className="flex gap-3">
+              <label className="flex items-center gap-1.5 text-xs">
+                <input type="radio" name="orden" checked={ordenDireccion === 1} onChange={() => setOrdenDireccion(1)} />
+                <span>1ra (Responsable de atender)</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs">
+                <input type="radio" name="orden" checked={ordenDireccion > 1} onChange={() => setOrdenDireccion(2)} />
+                <span>2da+ (Solo conocimiento)</span>
+              </label>
+            </div>
+            <p className="text-[9px] text-gray-400 mt-1">Si esta Dirección no es la primera en el orden, se registra automáticamente como documento de conocimiento.</p>
+          </div>
+
+          {/* Descripción */}
+          <div>
+            <label className="text-[10px] font-medium text-gray-700 mb-1 block">Observaciones (opcional)</label>
+            <textarea rows={2} value={descripcion} onChange={e => setDescripcion(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 resize-none" placeholder="Notas adicionales..." />
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+              <AlertTriangle size={12} className="inline mr-1" /> {error}
+            </div>
+          )}
+
+          </>)}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 px-5 py-3 border-t bg-gray-50">
+          <button onClick={onClose} className="px-4 py-2 text-xs rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100">
+            Cancelar
+          </button>
+          <button onClick={handleSave} disabled={saving || !asunto.trim()}
+            className="px-4 py-2 text-xs rounded-lg font-medium text-white disabled:opacity-50 transition-colors"
+            style={{ backgroundColor: '#911A3A' }}>
+            {saving ? 'Registrando...' : 'Registrar memorándum'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

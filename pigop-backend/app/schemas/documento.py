@@ -30,6 +30,12 @@ class DocumentoRecibidoCreate(BaseModel):
     descripcion:      Optional[str] = None
     tags:             Optional[List[str]] = None
     requiere_respuesta: bool = True
+    # ── Memorándums ──
+    tipo_memorandum:           Optional[str] = None   # 'conocimiento' | 'requiere_atencion'
+    dependencia_solicitante:   Optional[str] = None
+    upp_solicitante_codigo:    Optional[str] = None
+    documento_origen_id:       Optional[str] = None
+    memorandum_orden_direccion: Optional[int] = None
     # ── Archivo pre-subido (desde preview-ocr) ──
     nombre_archivo: Optional[str] = None
     url_storage:    Optional[str] = None
@@ -95,6 +101,12 @@ class DocumentoUpdate(BaseModel):
     firmado_digitalmente: Optional[bool] = None
     firma_metadata:       Optional[dict] = None
     tags:               Optional[List[str]] = None
+    # ── Memorándums ──
+    tipo_memorandum:           Optional[str] = None
+    dependencia_solicitante:   Optional[str] = None
+    upp_solicitante_codigo:    Optional[str] = None
+    documento_origen_id:       Optional[str] = None
+    memorandum_orden_direccion: Optional[int] = None
 
 
 class ConfirmarTurnoInput(BaseModel):
@@ -146,6 +158,13 @@ class DocumentoListResponse(BaseModel):
     acuse_recibido_url:    Optional[str] = None
     acuse_recibido_nombre: Optional[str] = None
     acuse_recibido_fecha:  Optional[str] = None
+    visto_bueno_subdirector: Optional[bool] = False
+    upp_solicitante:  Optional[str] = None
+    tipo_memorandum:  Optional[str] = None
+    dependencia_solicitante: Optional[str] = None
+    upp_solicitante_codigo:  Optional[str] = None
+    documento_origen_id:     Optional[str] = None
+    memorandum_orden_direccion: Optional[int] = None
     has_borrador:     bool = False
     tags:             Optional[List[str]]
     creado_en:        datetime

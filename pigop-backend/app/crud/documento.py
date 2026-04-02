@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +38,7 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
         tipo: Optional[str] = None,
         estado: Optional[str] = None,
         area_turno: Optional[str] = None,
+        area_turno_in: Optional[List[str]] = None,
         busqueda: Optional[str] = None,
         fecha_desde: Optional[str] = None,
         fecha_hasta: Optional[str] = None,
@@ -56,6 +57,8 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
             stmt = stmt.where(DocumentoOficial.estado == estado)
         if area_turno:
             stmt = stmt.where(DocumentoOficial.area_turno == area_turno)
+        elif area_turno_in:
+            stmt = stmt.where(DocumentoOficial.area_turno.in_(area_turno_in))
         if busqueda and len(busqueda) >= 2:
             term = f"%{busqueda}%"
             stmt = stmt.where(
@@ -86,6 +89,61 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
         stmt = stmt.order_by(DocumentoOficial.creado_en.desc()).offset(skip).limit(limit)
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    async def count_documentos(
+        self,
+        db: AsyncSession,
+        *,
+        cliente_id: Optional[str] = None,
+        flujo: Optional[str] = None,
+        tipo: Optional[str] = None,
+        estado: Optional[str] = None,
+        area_turno: Optional[str] = None,
+        area_turno_in: Optional[List[str]] = None,
+        busqueda: Optional[str] = None,
+        fecha_desde: Optional[str] = None,
+        fecha_hasta: Optional[str] = None,
+    ) -> int:
+        """Cuenta documentos con los mismos filtros que list_documentos."""
+        stmt = select(func.count()).select_from(DocumentoOficial)
+        if cliente_id:
+            stmt = stmt.where(DocumentoOficial.cliente_id == str(cliente_id))
+        if flujo:
+            stmt = stmt.where(DocumentoOficial.flujo == flujo)
+        if tipo:
+            stmt = stmt.where(DocumentoOficial.tipo == tipo)
+        if estado:
+            stmt = stmt.where(DocumentoOficial.estado == estado)
+        if area_turno:
+            stmt = stmt.where(DocumentoOficial.area_turno == area_turno)
+        elif area_turno_in:
+            stmt = stmt.where(DocumentoOficial.area_turno.in_(area_turno_in))
+        if busqueda and len(busqueda) >= 2:
+            term = f"%{busqueda}%"
+            stmt = stmt.where(
+                DocumentoOficial.asunto.ilike(term)
+                | DocumentoOficial.numero_oficio_origen.ilike(term)
+                | DocumentoOficial.numero_control.ilike(term)
+                | DocumentoOficial.remitente_nombre.ilike(term)
+                | DocumentoOficial.remitente_dependencia.ilike(term)
+                | DocumentoOficial.folio_respuesta.ilike(term)
+                | DocumentoOficial.dependencia_destino.ilike(term)
+                | DocumentoOficial.dependencia_origen.ilike(term)
+            )
+        if fecha_desde:
+            try:
+                desde = datetime.fromisoformat(fecha_desde).replace(tzinfo=None)
+                stmt = stmt.where(DocumentoOficial.creado_en >= desde)
+            except ValueError:
+                pass
+        if fecha_hasta:
+            try:
+                hasta = datetime.fromisoformat(fecha_hasta).replace(hour=23, minute=59, second=59, tzinfo=None)
+                stmt = stmt.where(DocumentoOficial.creado_en <= hasta)
+            except ValueError:
+                pass
+        result = await db.execute(stmt)
+        return result.scalar() or 0
 
     async def crear_recibido(
         self,

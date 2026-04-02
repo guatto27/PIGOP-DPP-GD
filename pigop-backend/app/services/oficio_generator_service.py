@@ -728,11 +728,12 @@ class OficioGeneratorService:
         self, doc: Document,
         elaboro: Optional[str], reviso: Optional[str],
     ) -> None:
-        """Referencia interna: MAFM/elaboro/reviso."""
+        """Referencia interna: iniciales Director / elaboró / revisó."""
+        from app.services.correspondencia_service import generar_referencia_oficio
         self._add_empty_lines(doc, 1)
         p = doc.add_paragraph()
         p.paragraph_format.space_after = Pt(0)
-        ref = f"MAFM/{elaboro or '???'}/{reviso or '???'}"
+        ref = generar_referencia_oficio("DIR", elaboro, reviso)
         run = p.add_run(ref)
         run.font.size = Pt(6)
         run.font.color.rgb = RGBColor(0, 0, 0)

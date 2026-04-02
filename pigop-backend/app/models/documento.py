@@ -162,6 +162,22 @@ class DocumentoOficial(Base):
     acuse_registrado_en    = Column(DateTime(timezone=True), nullable=True)
     acuse_registrado_por_id = Column(String(36), ForeignKey("usuarios.id"), nullable=True)
 
+    # ── Visto Bueno del Subdirector (check de revisión previo a firma) ───────
+    visto_bueno_subdirector = Column(Boolean, default=False)
+    visto_bueno_subdirector_id = Column(String(36), ForeignKey("usuarios.id"), nullable=True)
+    visto_bueno_subdirector_en = Column(DateTime(timezone=True), nullable=True)
+
+    # ── Memorándums ────────────────────────────────────────────────────────────
+    # 'conocimiento' | 'requiere_atencion'
+    tipo_memorandum = Column(String(30), nullable=True)
+    # UPP/dependencia que originó el asunto (a quien se responde, NO al emisor del memo)
+    dependencia_solicitante = Column(String(200), nullable=True)
+    upp_solicitante_codigo = Column(String(20), nullable=True)
+    # Referencia al documento que originó el memorándum
+    documento_origen_id = Column(String(36), ForeignKey("documentos_oficiales.id"), nullable=True)
+    # Posición de esta dirección en el memo (1=responsable, 2+=conocimiento)
+    memorandum_orden_direccion = Column(Integer, nullable=True)
+
     # ── Vinculación con otros módulos ─────────────────────────────────────────
     certificacion_id = Column(String(36), nullable=True)   # FK futuro a Certificaciones
     # Estado sincronizado desde módulo externo (certificaciones, minutas, etc.)
@@ -182,11 +198,12 @@ class DocumentoOficial(Base):
     )
 
     # Relaciones
-    cliente      = relationship("Cliente",  foreign_keys=[cliente_id])
-    creado_por   = relationship("Usuario",  foreign_keys=[creado_por_id])
-    turnado_por  = relationship("Usuario",  foreign_keys=[turnado_por_id])
-    devuelto_por = relationship("Usuario",  foreign_keys=[devuelto_por_id])
-    atendido_por = relationship("Usuario",  foreign_keys=[atendido_por_id])
+    cliente         = relationship("Cliente",  foreign_keys=[cliente_id])
+    creado_por      = relationship("Usuario",  foreign_keys=[creado_por_id])
+    turnado_por     = relationship("Usuario",  foreign_keys=[turnado_por_id])
+    devuelto_por    = relationship("Usuario",  foreign_keys=[devuelto_por_id])
+    atendido_por    = relationship("Usuario",  foreign_keys=[atendido_por_id])
+    documento_origen = relationship("DocumentoOficial", foreign_keys=[documento_origen_id], remote_side=[id])
     historial    = relationship(
         "HistorialDocumento",
         back_populates="documento",

@@ -15,9 +15,13 @@ Con bóveda:
   - Cada firma se registra en la bitácora
 """
 import io
+import logging
+import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from sqlalchemy import select
@@ -256,10 +260,12 @@ async def ejecutar_firma_lote(
     using_boveda = False
 
     # Intentar obtener certificado de la bóveda
+    logger.info(f"[FIRMA-LOTE] Iniciando ejecución lote {lote_id[:8]}... usuario {usuario_id[:8]}...")
     cert_record = await boveda_certificados_service.obtener_certificado(db, usuario_id)
 
     if cert_record:
         # Usar certificado de la bóveda
+        logger.info(f"[FIRMA-LOTE] Usando certificado de bóveda para {usuario_id[:8]}...")
         try:
             key_bytes, cer_bytes, cert_record = await boveda_certificados_service.descifrar_clave_privada(
                 db, usuario_id=usuario_id, password=password, ip_origen=ip,
@@ -272,10 +278,13 @@ async def ejecutar_firma_lote(
                 "valido_hasta": cert_record.valido_hasta.isoformat() if cert_record.valido_hasta else "",
             }
             using_boveda = True
+            logger.info(f"[FIRMA-LOTE] Bóveda descifrada OK. RFC={cert_info['rfc']}")
         except ValueError as e:
-            raise BusinessError(str(e))
+            logger.error(f"[FIRMA-LOTE] Error descifrado bóveda: {e}")
+            raise BusinessError(f"Error de certificado: {str(e)}")
     elif cer_file and key_file:
         # Fallback: subir archivos directamente
+        logger.info(f"[FIRMA-LOTE] Usando archivos subidos para {usuario_id[:8]}...")
         cer_bytes = await cer_file.read()
         key_bytes = await key_file.read()
         cert_result = firma_electronica_service.validar_certificado(cer_bytes, key_bytes, password)
@@ -294,13 +303,16 @@ async def ejecutar_firma_lote(
             "Si no tiene certificado registrado, suba los archivos .cer y .key."
         )
 
-    # Abrir sesión de firma segura (5 min)
+    # Abrir sesión de firma segura (TTL proporcional al batch, min 5 min)
+    duracion_min = max(5, lote.total_documentos * 2)  # ~2 min por doc, min 5
     sesion_id = sesion_firma_service.abrir_sesion(
         usuario_id=usuario_id,
         key_bytes=key_bytes,
         cer_bytes=cer_bytes,
         cert_info=cert_info,
+        duracion_minutos=duracion_min,
     )
+    logger.info(f"[FIRMA-LOTE] Sesión abierta. TTL={duracion_min}min para {lote.total_documentos} docs.")
 
     # Registrar apertura de sesión en bitácora
     await boveda_certificados_service._registrar_bitacora(
@@ -424,6 +436,10 @@ async def ejecutar_firma_lote(
             item.estado = "error"
             item.error_mensaje = str(e)[:500]
             total_errores += 1
+            logger.error(
+                f"[FIRMA-LOTE] Error firmando doc {item.documento_id[:8]}...: {e}\n"
+                f"{traceback.format_exc()}"
+            )
 
     # Cerrar sesión de firma (limpiar clave de memoria)
     sesion_firma_service.cerrar_sesion(usuario_id)
