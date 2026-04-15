@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   ShieldCheck, FolderOpen, Stamp, ClipboardList,
   LogOut, User, ChevronDown, Lock, Home,
-  FileSpreadsheet, Inbox, Settings, Menu, X,
+  FileSpreadsheet, Inbox, Settings, Menu, X, ScanSearch,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '../hooks/useAuth'
@@ -16,6 +16,7 @@ interface SubModule {
   fullLabel: string
   match: (path: string) => boolean
   active: boolean
+  adminOnly?: boolean
 }
 
 interface NavModule {
@@ -67,6 +68,15 @@ const NAV_MODULES: NavModule[] = [
         fullLabel: 'Revisión de DEPPs en lotes',
         match: (path: string) => path.startsWith('/bandejas'),
         active: true,
+      },
+      {
+        to: '/revision-documental',
+        icon: ScanSearch,
+        label: 'Revisión Documental IA',
+        fullLabel: 'Validación con IA — Solo Administrador',
+        match: (path: string) => path.startsWith('/revision-documental'),
+        active: true,
+        adminOnly: true,
       },
     ],
   },
@@ -123,6 +133,8 @@ function getPageMeta(path: string): { title: string; subtitle: string } {
     return { title: 'Certificaciones Presupuestales', subtitle: 'Gestión de afectaciones y certificaciones al presupuesto' }
   if (path.startsWith('/minutas'))
     return { title: 'Minutas de Conciliación Presupuestal', subtitle: 'Control y seguimiento de reuniones entre áreas' }
+  if (path.startsWith('/revision-documental'))
+    return { title: 'Revisión Documental con IA', subtitle: 'Validación automatizada de coherencia documental · Solo Administrador' }
   if (path.startsWith('/admin'))
     return { title: 'Administración del Sistema', subtitle: 'Gestión de usuarios, roles y dependencias registradas en PIGOP' }
   return { title: 'PIGOP', subtitle: 'Secretaría de Finanzas y Administración' }
@@ -281,7 +293,12 @@ export default function Layout() {
     consulta:      ['gestion_documental'],
   }
   const permitidos = MODULOS_POR_ROL[user?.rol || ''] || []
-  const visibleModules = NAV_MODULES.filter(mod => isAdmin || permitidos.includes(mod.moduleId))
+  const visibleModules = NAV_MODULES
+    .filter(mod => isAdmin || permitidos.includes(mod.moduleId))
+    .map(mod => ({
+      ...mod,
+      submodules: mod.submodules?.filter(sub => !sub.adminOnly || isAdmin),
+    }))
 
   const handleLogout = () => {
     logout()

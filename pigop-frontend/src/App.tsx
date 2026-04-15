@@ -11,6 +11,7 @@ import SAPImport from './pages/SAPImport'
 import Bandejas from './pages/Bandejas'
 import RevisionLote from './pages/RevisionLote'
 import Admin from './pages/Admin'
+import RevisionDocumental from './pages/RevisionDocumental'
 import Layout from './components/Layout'
 import { Spinner } from './components/ui/Spinner'
 
@@ -45,6 +46,26 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   if (user.rol !== 'superadmin' && user.rol !== 'admin_cliente') {
     return <Navigate to="/" replace />
   }
+  return <>{children}</>
+}
+
+// Ruta para Revisión Documental: admins + usuarios con acceso a validacion_depp
+function RevisionDocumentalRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Spinner size="lg" />
+      </div>
+    )
+  }
+
+  if (!user) return <Navigate to="/login" replace />
+  const isAdmin = user.rol === 'superadmin' || user.rol === 'admin_cliente'
+  const acceso = user.modulos_acceso || []
+  const hasAcceso = acceso.includes('validacion_depp') || acceso.includes('todos')
+  if (!isAdmin && !hasAcceso) return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -86,6 +107,16 @@ export default function App() {
 
           {/* Módulo 4: Minutas de Conciliación */}
           <Route path="minutas" element={<MiutasConciliacion />} />
+
+          {/* Revisión Documental con IA (admins + usuarios con acceso validacion_depp) */}
+          <Route
+            path="revision-documental"
+            element={
+              <RevisionDocumentalRoute>
+                <RevisionDocumental />
+              </RevisionDocumentalRoute>
+            }
+          />
 
           {/* Panel de Administración (solo admin) */}
           <Route

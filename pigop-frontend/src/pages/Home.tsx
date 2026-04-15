@@ -44,13 +44,13 @@ const ALL_MODULES: ModuleDef[] = [
   {
     id: 'validacion_depp',
     label: 'Validación de Gasto Público',
-    subtitle: 'CONTROL Y VALIDACIÓN NORMATIVA',
-    description: 'Validación de afectaciones presupuestales, revisión de CLC y documentos soporte conforme a normatividad vigente.',
+    subtitle: 'REVISIÓN DOCUMENTAL CON IA',
+    description: 'Validación automatizada de DEPPs y expedientes digitales. Análisis con Inteligencia Artificial conforme a normatividad vigente.',
     icon: ShieldCheck,
-    path: '/depps',
+    path: '/revision-documental',
     color: '#1d4ed8',
     bgColor: '#eff6ff',
-    active: false,
+    active: true,
   },
   {
     id: 'certificaciones',
@@ -125,8 +125,8 @@ export default function Home() {
     secretaria:    ['gestion_documental'],
     asesor:        ['gestion_documental'],
     subdirector:   ['gestion_documental'],
-    jefe_depto:    ['gestion_documental'],
-    analista:      ['gestion_documental', 'validacion_depp'],
+    jefe_depto:    ['gestion_documental', 'validacion_depp'],
+    analista:      ['gestion_documental'],
     auditor:       ['gestion_documental'],
     consulta:      ['gestion_documental'],
   }
