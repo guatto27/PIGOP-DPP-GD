@@ -2607,8 +2607,7 @@ function PanelRecibido({
                     try {
                       await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
                       invalidate()
-                      setToast({ msg: 'Documento enviado correctamente a revisión y firma del Director', type: 'success' })
-                      setTimeout(() => setToast(null), 4000)
+                      setEnviadoFirmaOk(true)
                     } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                   }}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
@@ -4367,7 +4366,6 @@ export default function GestionDocumental() {
             </div>
             <button onClick={async () => {
               const token = localStorage.getItem('access_token')
-              const base = (documentosApi as any).__baseUrl || '/api/v1'
               try {
                 const res = await fetch(`${window.location.origin}/api/v1/documentos/export-emitidos`, {
                   headers: { Authorization: `Bearer ${token}` },
@@ -4817,7 +4815,7 @@ export default function GestionDocumental() {
                         className={clsx('cursor-pointer transition-colors', doc.id === selectedId ? 'bg-[#FDF8F9]' : 'hover:bg-gray-50')}>
                         <td className="px-3 py-2.5">
                           <span className="font-mono text-[10px] text-gray-600 truncate block max-w-[120px]">
-                            {doc.folio_respuesta || doc.numero_control || '—'}
+                            {doc.numero_control || '—'}
                           </span>
                         </td>
                         <td className="px-3 py-2.5">
@@ -5004,7 +5002,7 @@ function RegistroMemorandumModal({ clienteId, onClose, onSaved }: {
   const [uppSearch, setUppSearch] = useState('')
   const { data: uppSugerencias } = useQuery({
     queryKey: ['upps-memo', uppSearch],
-    queryFn: () => catalogoApi.buscarUpps(uppSearch),
+    queryFn: () => catalogoApi.buscarUPPs(uppSearch),
     enabled: uppSearch.length >= 2,
   })
 
@@ -5023,9 +5021,9 @@ function RegistroMemorandumModal({ clienteId, onClose, onSaved }: {
       if (d.fecha_documento) setFechaMemo(d.fecha_documento as string)
       if (d.remitente_dependencia) setEmisor(d.remitente_dependencia as string)
       // Guardar referencia al archivo pre-procesado
-      if (result.archivo_url) setFileUrl(result.archivo_url)
-      if (result.archivo_nombre) setFileName(result.archivo_nombre)
-      if (result.archivo_mime) setFileMime(result.archivo_mime)
+      if (result.archivo?.url_storage) setFileUrl(result.archivo.url_storage)
+      if (result.archivo?.nombre_archivo) setFileName(result.archivo.nombre_archivo)
+      if (result.archivo?.mime_type) setFileMime(result.archivo.mime_type)
       setStep('form')
     } catch (e: unknown) {
       setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Error al procesar archivo')
