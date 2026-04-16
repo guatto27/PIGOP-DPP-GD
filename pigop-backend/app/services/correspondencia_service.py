@@ -576,7 +576,18 @@ REGLAS_TURNO = [
 
 # ── Prompt OCR oficial ─────────────────────────────────────────────────────────
 _PROMPT_OCR_OFICIO = """Eres un experto en lectura de correspondencia oficial del Gobierno del Estado de Michoacán.
-Analiza este documento escaneado o fotografiado (oficio oficial) y extrae los datos en formato JSON estricto.
+Analiza este documento oficial (oficio institucional) y extrae los datos en formato JSON estricto.
+
+IDIOMA OBLIGATORIO: TODA la información extraída, incluyendo resúmenes, descripciones, campos de texto
+libre y cualquier contenido que generes, DEBE estar en ESPAÑOL. No traduzcas nombres propios ni términos
+técnicos en español. NUNCA respondas en inglés ni en otro idioma, aunque el documento parezca
+contener palabras en otro idioma o el OCR esté confuso.
+
+COBERTURA MULTI-PÁGINA: El documento puede tener VARIAS CUARTILLAS/PÁGINAS. DEBES analizar
+EXHAUSTIVAMENTE TODAS las páginas del documento antes de extraer los datos. Las firmas, el pie
+de oficio, las iniciales de elaboración/revisión y los anexos suelen estar en las ÚLTIMAS
+páginas, nunca asumas que están en la primera. Si hay varios firmantes distribuidos en
+distintas páginas, identifícalos TODOS.
 
 Extrae ÚNICAMENTE los campos que puedas identificar claramente. Si un campo no es visible o no existe, usa null.
 
@@ -585,12 +596,27 @@ Extrae ÚNICAMENTE los campos que puedas identificar claramente. Si un campo no 
   "fecha_documento": "fecha en formato YYYY-MM-DD",
   "lugar_fecha": "lugar y fecha como aparece en el documento",
   "asunto": "contenido exacto del campo Asunto",
-  "remitente_nombre": "nombre completo del firmante",
-  "remitente_cargo": "cargo del firmante",
+  "remitente_nombre": "nombre completo del firmante PRINCIPAL (ver REGLAS DE FIRMANTES)",
+  "remitente_cargo": "cargo del firmante PRINCIPAL",
   "remitente_dependencia": "institución o dependencia que envía",
+  "firmantes_adicionales": [
+    {
+      "nombre": "nombre de firmante secundario (ej: visto bueno, autorización)",
+      "cargo": "cargo del firmante secundario",
+      "rol": "visto_bueno | autoriza | elaboró | revisó | otro"
+    }
+  ],
   "destinatario_nombre": "nombre del destinatario",
   "destinatario_cargo": "cargo del destinatario",
-  "cuerpo_resumen": "resumen del contenido principal del oficio (máximo 150 palabras)",
+  "cuerpo_resumen": "resumen EN ESPAÑOL del contenido principal del oficio (máximo 150 palabras)",
+  "numero_paginas": "número total de páginas/cuartillas del oficio principal (no cuentes anexos)",
+  "anexos": [
+    {
+      "tipo": "oficio | tabla | comprobante | factura | contrato | listado | otro",
+      "descripcion": "breve descripción EN ESPAÑOL del anexo",
+      "paginas": "rango de páginas donde se encuentra (ej: '3-5')"
+    }
+  ],
   "datos_tecnicos": {
     "partidas": ["lista de partidas presupuestales mencionadas"],
     "montos": ["lista de montos con concepto (ej: '$633,308.50 — Remanentes FAM 2022')"],
@@ -609,12 +635,40 @@ Extrae ÚNICAMENTE los campos que puedas identificar claramente. Si un campo no 
   "tipo_origen": "dependencia_externa|juridico|transparencia|organo_control|auditoria|otro"
 }
 
-REGLAS ADICIONALES PARA PLAZOS:
+=== REGLAS DE FIRMANTES (CRÍTICO) ===
+Un oficio puede tener VARIOS firmantes. Debes distinguir quién es el REMITENTE PRINCIPAL
+(la persona que emite el oficio y con quien se debe dirigir la respuesta) de quienes firman
+como visto bueno, autorización, elaboración o revisión.
+
+Jerarquía para identificar al REMITENTE PRINCIPAL:
+  1. Es el firmante de MAYOR JERARQUÍA en el pie del oficio (Secretario > Subsecretario >
+     Director General > Director > Subdirector > Jefe de Departamento > Titular/Responsable).
+  2. Es quien aparece con cargo ejecutivo/directivo, NO el que firma con etiqueta "Elaboró",
+     "Revisó", "Vo.Bo.", "Visto Bueno", "Autoriza" o iniciales al pie.
+  3. Cuando dos firmantes tienen el mismo nivel, el REMITENTE es el primero en el orden
+     del oficio (generalmente a la izquierda o arriba).
+  4. Las INICIALES AL PIE (ej: "MAFM/hda/jlpe") NO son firmantes — son solo referencias
+     de quien elaboró/revisó. NO las uses como remitente_nombre.
+  5. Si el oficio está firmado por UNA sola persona, esa es el remitente y "firmantes_adicionales"
+     debe ser [] (array vacío).
+
+Coloca los demás firmantes (visto bueno, autoriza, elaboró, revisó) en "firmantes_adicionales".
+NUNCA confundas a un firmante de visto bueno con el remitente principal.
+
+=== REGLAS DE ANEXOS ===
+Si el documento incluye ANEXOS (tablas, listados, comprobantes, oficios adjuntos, fotos, etc.):
+  - Identifica CADA anexo en el array "anexos" con su tipo y descripción en español.
+  - No describas el anexo en lugar del oficio principal — el "cuerpo_resumen" debe ser
+    del oficio principal, no de los anexos.
+  - Si el oficio principal menciona "se adjunta X", "anexo al presente", "se acompaña",
+    etc., ahí hay anexos que debes registrar.
+
+=== REGLAS DE PLAZOS ===
 - Si el documento contiene un plazo explícito de respuesta (ej: "deberá responder en un plazo de 3 días hábiles"), EXTRAE el plazo en "plazo_respuesta_detectado" y el número en "plazo_dias_numero".
 - Si el remitente es un órgano jurisdiccional, jurídico, de transparencia, órgano de control interno (OCI), auditoría, o ente fiscalizador, marca "origen_requiere_urgencia": true y en "tipo_origen" indica la categoría.
 - Busca frases como: "se le requiere", "apercibimiento", "término de ley", "plazo perentorio", "días hábiles para contestar", "vencimiento".
 
-Responde ÚNICAMENTE con el JSON, sin texto adicional ni markdown."""
+Responde ÚNICAMENTE con el JSON, sin texto adicional ni markdown. TODO el contenido del JSON DEBE estar en ESPAÑOL."""
 
 # ── Prompt generación de borrador (unificado para documentos recibidos) ────────
 # Basado en los modelos institucionales reales de la DPP.

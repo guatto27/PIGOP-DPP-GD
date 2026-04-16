@@ -2324,6 +2324,7 @@ function PanelRecibido({
                     ['Fecha', datosIA['fecha_documento']],
                     ['Remitente', datosIA['remitente_nombre']],
                     ['Dependencia', datosIA['remitente_dependencia']],
+                    ['Páginas', datosIA['numero_paginas']],
                   ] as [string, unknown][]).filter(([, val]) => !!val).map(([label, val]) => (
                     <div key={label} className="bg-gray-50 rounded-lg px-2 py-1.5">
                       <span className="text-[9px] text-gray-500">{label}</span>
@@ -2331,6 +2332,43 @@ function PanelRecibido({
                     </div>
                   ))}
                 </div>
+
+                {/* Firmantes adicionales (visto bueno, autoriza, etc.) */}
+                {Array.isArray(datosIA['firmantes_adicionales']) && (datosIA['firmantes_adicionales'] as unknown[]).length > 0 && (
+                  <div className="bg-blue-50 border border-blue-100 rounded-lg px-2 py-1.5">
+                    <p className="text-[9px] font-semibold text-blue-700 mb-1">Firmantes adicionales</p>
+                    <div className="space-y-1">
+                      {(datosIA['firmantes_adicionales'] as Array<{ nombre?: string; cargo?: string; rol?: string }>).map((f, i) => (
+                        <div key={i} className="text-[10px] text-blue-800">
+                          <span className="font-medium">{f.nombre || '—'}</span>
+                          {f.cargo && <span className="text-blue-600"> · {f.cargo}</span>}
+                          {f.rol && <span className="ml-1 text-[9px] bg-blue-100 px-1 rounded">{f.rol}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Anexos detectados */}
+                {Array.isArray(datosIA['anexos']) && (datosIA['anexos'] as unknown[]).length > 0 && (
+                  <div className="bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">
+                    <p className="text-[9px] font-semibold text-amber-700 mb-1">
+                      Anexos detectados ({(datosIA['anexos'] as unknown[]).length})
+                    </p>
+                    <div className="space-y-1">
+                      {(datosIA['anexos'] as Array<{ tipo?: string; descripcion?: string; paginas?: string }>).map((a, i) => (
+                        <div key={i} className="text-[10px] text-amber-800 flex items-start gap-1">
+                          <span className="text-amber-500">•</span>
+                          <div className="flex-1">
+                            {a.tipo && <span className="font-medium">{a.tipo}</span>}
+                            {a.descripcion && <span>: {a.descripcion}</span>}
+                            {a.paginas && <span className="text-[9px] text-amber-500 ml-1">(p. {a.paginas})</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
