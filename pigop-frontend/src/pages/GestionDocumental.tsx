@@ -4106,10 +4106,15 @@ export default function GestionDocumental() {
     onSuccess:  () => { qc.invalidateQueries({ queryKey: ['documentos'] }); setSelectedId(null) },
   })
 
-  // Certificado e.firma status
+  // Certificado e.firma status — con auto-refresh para detectar registros recientes
   const { data: certStatus } = useQuery<CertificadoInfo>({
     queryKey: ['mi-certificado'],
     queryFn: certificadosApi.miCertificado,
+    staleTime: 5_000,                 // considerar fresca 5s
+    refetchOnMount: 'always',         // siempre refrescar al montar
+    refetchOnWindowFocus: true,       // refrescar al volver a la pestaña
+    refetchInterval: 15_000,          // poll cada 15s
+    enabled: !!user?.rol && (user.rol === 'admin_cliente' || user.rol === 'superadmin'),
   })
   const tieneCert = certStatus?.tiene_certificado ?? false
   const certVigente = certStatus?.vigente ?? false

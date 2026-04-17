@@ -8,6 +8,7 @@ Flujo:
   4. DELETE /revocar            → Desactiva certificado
   5. POST /renovar             → Reemplaza con nuevo par
 """
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -20,6 +21,8 @@ from app.core.database import get_db
 from app.core.exceptions import BusinessError, ForbiddenError, NotFoundError
 from app.models.user import Usuario
 from app.services.boveda_certificados_service import boveda_certificados_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -107,6 +110,11 @@ async def registrar_certificado(
     cer_bytes = await cer_file.read()
     key_bytes = await key_file.read()
 
+    logger.info(
+        f"[CERT-REGISTRAR] usuario={current_user.email} id={str(current_user.id)[:8]}... "
+        f"cer_size={len(cer_bytes)} key_size={len(key_bytes)} has_password={bool(password)}"
+    )
+
     if not cer_bytes or not key_bytes or not password:
         raise BusinessError("Debe proporcionar certificado (.cer), clave (.key) y contraseña.")
 
@@ -121,8 +129,16 @@ async def registrar_certificado(
             password=password,
             ip_origen=ip,
         )
+        logger.info(
+            f"[CERT-REGISTRAR] OK → RFC={cert_record.rfc} serial={cert_record.numero_serie} "
+            f"activo={cert_record.activo} id_row={str(cert_record.id)[:8]}..."
+        )
     except ValueError as e:
+        logger.error(f"[CERT-REGISTRAR] ValueError: {e}")
         raise BusinessError(str(e))
+    except Exception as e:
+        logger.exception(f"[CERT-REGISTRAR] Unexpected error: {e}")
+        raise BusinessError(f"Error interno al registrar certificado: {e}")
 
     return CertificadoRegistroResponse(
         rfc=cert_record.rfc,
@@ -144,19 +160,44 @@ async def obtener_mi_certificado(
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(get_current_active_user),
 ):
-    """Retorna metadata del certificado registrado (sin clave privada)."""
-    cert = await boveda_certificados_service.obtener_certificado(
-        db, str(current_user.id)
-    )
+    """Retorna metadata del certificado registrado (sin clave privada).
 
+    Busca primero el activo; si no existe, busca cualquier cert del usuario
+    (revocado/inactivo) para mostrar al usuario por qué no puede firmar.
+    """
+    uid = str(current_user.id)
+    cert = await boveda_certificados_service.obtener_certificado(db, uid)
+
+    # Si no hay cert activo, buscar si hay alguno revocado/inactivo
     if not cert:
+        cert_cualquier = await boveda_certificados_service.obtener_certificado_cualquier_estado(db, uid)
+        if cert_cualquier:
+            logger.info(
+                f"[CERT-GET] usuario={current_user.email} tiene cert INACTIVO "
+                f"(activo={cert_cualquier.activo}, rfc={cert_cualquier.rfc})"
+            )
+            # Devolver info del cert revocado para que el usuario sepa
+            return CertificadoInfoResponse(
+                tiene_certificado=True,
+                vigente=False,
+                activo=cert_cualquier.activo,
+                rfc=cert_cualquier.rfc,
+                nombre_titular=cert_cualquier.nombre_titular,
+                numero_serie=cert_cualquier.numero_serie,
+                valido_desde=cert_cualquier.valido_desde.isoformat() if cert_cualquier.valido_desde else None,
+                valido_hasta=cert_cualquier.valido_hasta.isoformat() if cert_cualquier.valido_hasta else None,
+                emisor=cert_cualquier.emisor,
+                total_firmas=cert_cualquier.total_firmas or 0,
+                registrado_en=cert_cualquier.registrado_en.isoformat() if cert_cualquier.registrado_en else None,
+                ultima_firma_en=cert_cualquier.ultima_firma_en.isoformat() if cert_cualquier.ultima_firma_en else None,
+            )
+        logger.info(f"[CERT-GET] usuario={current_user.email} NO tiene cert registrado")
         return CertificadoInfoResponse(tiene_certificado=False)
 
-    # Calcular vigencia — normalizar a naive UTC para evitar mismatch con SQLite
+    # Calcular vigencia — normalizar a naive UTC para evitar mismatch con SQLite/Postgres
     now = datetime.utcnow()
     desde = cert.valido_desde
     hasta = cert.valido_hasta
-    # SQLite puede devolver datetimes naive o aware según el driver
     if desde and hasattr(desde, 'tzinfo') and desde.tzinfo is not None:
         desde = desde.replace(tzinfo=None)
     if hasta and hasattr(hasta, 'tzinfo') and hasta.tzinfo is not None:
@@ -165,6 +206,10 @@ async def obtener_mi_certificado(
         cert.activo
         and (desde is None or desde <= now)
         and (hasta is None or hasta >= now)
+    )
+    logger.info(
+        f"[CERT-GET] usuario={current_user.email} cert OK → "
+        f"rfc={cert.rfc} vigente={vigente} activo={cert.activo}"
     )
 
     return CertificadoInfoResponse(

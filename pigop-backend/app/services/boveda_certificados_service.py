@@ -362,11 +362,24 @@ class BovedaCertificadosService:
     async def obtener_certificado(
         self, db: AsyncSession, usuario_id: str
     ) -> Optional[CertificadoFirma]:
-        """Retorna metadata del certificado (sin clave privada)."""
+        """Retorna metadata del certificado ACTIVO (sin clave privada)."""
         result = await db.execute(
             select(CertificadoFirma).where(
                 CertificadoFirma.usuario_id == usuario_id,
                 CertificadoFirma.activo == True,  # noqa: E712
+            )
+        )
+        cert = result.scalar_one_or_none()
+        logger.info(f"[BOVEDA] obtener_certificado({usuario_id[:8]}...) → {'FOUND' if cert else 'NOT FOUND'}")
+        return cert
+
+    async def obtener_certificado_cualquier_estado(
+        self, db: AsyncSession, usuario_id: str
+    ) -> Optional[CertificadoFirma]:
+        """Retorna cualquier cert del usuario (activo o revocado) para diagnóstico."""
+        result = await db.execute(
+            select(CertificadoFirma).where(
+                CertificadoFirma.usuario_id == usuario_id,
             )
         )
         return result.scalar_one_or_none()
