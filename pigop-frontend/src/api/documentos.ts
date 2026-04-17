@@ -455,6 +455,12 @@ export const documentosApi = {
     return res.data
   },
 
+  // Secretaría: cambiar si un oficio requiere respuesta o es solo conocimiento
+  cambiarTipoRespuesta: async (id: string, requiere_respuesta: boolean): Promise<Documento> => {
+    const res = await apiClient.post(`/documentos/${id}/cambiar-tipo-respuesta`, { requiere_respuesta })
+    return res.data
+  },
+
   cargarReferencia: async (id: string, file: File): Promise<Documento> => {
     const form = new FormData()
     form.append('file', file)

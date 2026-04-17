@@ -1437,6 +1437,11 @@ function PanelRecibido({
   }
 
   const handleDevolver = async () => {
+    // Validación defensiva: solo Director, Secretaría o Superadmin pueden devolver
+    if (!isDirector && !isSecretaria && !isSuperadmin) {
+      window.alert('No tiene permiso para devolver documentos. Solo Director o Secretaría.')
+      return
+    }
     if (observacionesDevolucion.trim().length < 10) return
     setDevolviendo(true)
     try {
@@ -1868,6 +1873,45 @@ function PanelRecibido({
                 <p className="text-[10px] text-gray-400 italic">Pendiente de turno por Director o Secretaría.</p>
               )}
             </div>
+
+            {/* Control de tipo: Requiere respuesta vs Solo conocimiento (Secretaría/Director/Superadmin) */}
+            {(isSecretaria || isDirector || isSuperadmin) && !doc.firmado_digitalmente && !['firmado', 'archivado'].includes(doc.estado) && (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-700 uppercase tracking-wide">Tipo de oficio</p>
+                    <p className="text-[10px] text-gray-500">
+                      {doc.requiere_respuesta
+                        ? 'Requiere respuesta formal'
+                        : 'Solo conocimiento (sin respuesta)'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const nuevoValor = !doc.requiere_respuesta
+                      const confirmMsg = nuevoValor
+                        ? '¿Cambiar a "Requiere respuesta"? El oficio volverá al flujo de atención normal.'
+                        : '¿Cambiar a "Solo conocimiento"? El oficio NO generará respuesta. Esta acción se registra en el historial.'
+                      if (!window.confirm(confirmMsg)) return
+                      try {
+                        await documentosApi.cambiarTipoRespuesta(doc.id, nuevoValor)
+                        invalidate()
+                      } catch (e) {
+                        window.alert('Error: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
+                      }
+                    }}
+                    className={clsx(
+                      'px-3 py-1.5 text-[10px] rounded-md font-medium border transition-colors',
+                      doc.requiere_respuesta
+                        ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                        : 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    )}
+                  >
+                    {doc.requiere_respuesta ? '→ Cambiar a Conocimiento' : '→ Cambiar a Requiere respuesta'}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Pipeline */}
             <div>
@@ -2654,7 +2698,7 @@ function PanelRecibido({
                   </button>
                 )}
               </div>
-              {(isDirector || isSecretaria) && (
+              {(isDirector || isSecretaria || isSuperadmin) && (
                 <button onClick={() => { setObservacionesDevolucion(''); setShowDevolucionModal(true) }}
                   className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium bg-red-50 border border-red-300 text-red-700 hover:bg-red-100 transition-colors">
                   <AlertTriangle size={12} /> Devolver para correcciones
@@ -2850,7 +2894,7 @@ function PanelRecibido({
                       />
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
-                      {isDirector && (
+                      {(isDirector || isSuperadmin) && (
                         <button onClick={() => setShowDevolucionForm(true)}
                           className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg font-medium border border-red-300 text-red-700 hover:bg-red-50 transition-colors">
                           <CornerUpLeft size={12} /> Devolver
@@ -3193,6 +3237,11 @@ function PanelEmitido({
   }
 
   const handleDevolver = async () => {
+    // Validación defensiva: solo Director, Secretaría o Superadmin pueden devolver
+    if (!isDirector && !isSecretaria && !isSuperadmin) {
+      window.alert('No tiene permiso para devolver documentos. Solo Director o Secretaría.')
+      return
+    }
     if (observacionesDevolucion.trim().length < 10) return
     setDevolviendo(true)
     try {
@@ -3796,6 +3845,10 @@ function PanelEmitido({
                   style={{ backgroundColor: GUINDA }}>
                   <FileSignature size={13} /> Firmar y publicar
                 </button>
+              </>
+            )}
+            {(canFirmar || isSecretaria) && (
+              <>
                 <button onClick={() => setShowDevolucionModal(true)}
                   className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-red-300 text-red-600 hover:bg-red-50">
                   <CornerUpLeft size={10} /> Devolver con observaciones
@@ -4075,6 +4128,22 @@ export default function GestionDocumental() {
   const totalDocs = queryResult?.total ?? 0
   const totalPages = Math.ceil(totalDocs / pageSize)
 
+  // Query separada SIN paginación para calcular métricas reales del tab
+  // (los contadores deben reflejar carga TOTAL del usuario, no solo la página)
+  const paramsMetricas = {
+    flujo: params.flujo,
+    tipo:  params.tipo,
+    limit: 500,  // tope defensivo
+  }
+  const { data: metricasResult } = useQuery({
+    queryKey: ['documentos-metricas', paramsMetricas],
+    queryFn: () => documentosApi.list(paramsMetricas),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
+  })
+  const docsMetricas = metricasResult?.items ?? []
+
   // Reset page cuando cambian filtros
   useEffect(() => { setPage(0) }, [tab, busquedaDebounced, filtroEstado, filtroArea, fechaDesdeDebounced, fechaHastaDebounced, pageSize])
 
@@ -4125,8 +4194,20 @@ export default function GestionDocumental() {
   })()
 
   // Métricas recibidos
-  const porEstado = (e: string) => docs?.filter(d => d.estado === e).length ?? 0
-  const urgentes  = docs?.filter(d => d.prioridad !== 'normal').length ?? 0
+  // Los contadores usan docsMetricas (sin paginación) para reflejar el total real
+  const porEstado = (e: string) => docsMetricas.filter(d => d.estado === e).length
+  const urgentes  = docsMetricas.filter(d =>
+    d.prioridad !== 'normal' &&
+    !['firmado', 'archivado', 'de_conocimiento'].includes(d.estado)
+  ).length
+
+  // Pendientes reales: turnados + en_atencion que NO están firmados ni archivados ni despachados
+  // Excluye oficios informativos (requiere_respuesta=false si ya están en de_conocimiento)
+  const pendientesReales = docsMetricas.filter(d =>
+    ['turnado', 'en_atencion'].includes(d.estado) &&
+    !d.firmado_digitalmente &&
+    d.requiere_respuesta !== false
+  ).length
 
   if (isLoading) return <PageSpinner />
 
@@ -4380,14 +4461,14 @@ export default function GestionDocumental() {
         {tab === 'recibidos' ? (
           <div className="grid grid-cols-6 gap-2 px-4 py-2 bg-white border-b border-gray-100">
             {[
-              { label: 'Recibidos',   val: porEstado('recibido'),    color: '#3b82f6' },
-              { label: 'Turnados',    val: porEstado('turnado'),     color: '#f59e0b' },
-              { label: 'En atención', val: porEstado('en_atencion'), color: '#a855f7' },
-              { label: 'Firmados',    val: porEstado('firmado'),     color: '#10b981' },
-              { label: 'Devueltos',   val: porEstado('devuelto'),    color: '#dc2626' },
-              { label: 'Urgentes',    val: urgentes,                 color: '#ef4444' },
-            ].map(({ label, val, color }) => (
-              <div key={label} className="text-center">
+              { label: 'Recibidos',   val: porEstado('recibido'),    color: '#3b82f6', title: 'Oficios nuevos sin turno' },
+              { label: 'Pendientes',  val: pendientesReales,         color: '#f59e0b', title: 'Turnados o en atención — carga real pendiente' },
+              { label: 'En atención', val: porEstado('en_atencion'), color: '#a855f7', title: 'Recibidos por el área responsable' },
+              { label: 'Firmados',    val: porEstado('firmado'),     color: '#10b981', title: 'Ya firmados por el Director' },
+              { label: 'Devueltos',   val: porEstado('devuelto'),    color: '#dc2626', title: 'Devueltos al área para corrección' },
+              { label: 'Urgentes',    val: urgentes,                 color: '#ef4444', title: 'Oficios con prioridad alta/urgente' },
+            ].map(({ label, val, color, title }) => (
+              <div key={label} className="text-center" title={title}>
                 <p className="text-lg font-bold" style={{ color }}>{val}</p>
                 <p className="text-[9px] text-gray-500 leading-tight">{label}</p>
               </div>

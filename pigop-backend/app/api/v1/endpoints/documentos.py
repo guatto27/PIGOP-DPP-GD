@@ -81,19 +81,67 @@ AREA_JERARQUIA = {
     "DFNP": ["DFNP"],
 }
 
+# Roles con visibilidad total (ven todos los oficios)
+_ROLES_VISION_TOTAL = {"superadmin", "admin_cliente", "secretaria", "asesor", "auditor", "consulta"}
+# Roles con visibilidad restringida por area_codigo
+_ROLES_VISION_AREA = {"subdirector", "jefe_depto", "analista"}
+
+
 def _areas_visibles(user: Usuario) -> Optional[list[str]]:
     """
-    Retorna la lista de area_turno que el usuario puede ver,
-    o None si puede ver todo (director, secretaria, superadmin, auditor).
+    Retorna la lista de area_turno que el usuario puede ver:
+      - None: ve todo (Director, Secretaría, Superadmin, Asesor, Auditor, Consulta)
+      - [códigos]: solo ve documentos con area_turno en esa lista
+      - []: no ve nada (caso de subdirector/jefe sin area_codigo asignado)
+
+    Reglas:
+      - Subdirector: ve su área + departamentos subordinados (según AREA_JERARQUIA)
+      - Jefe de Departamento / Analista: solo ve su propia área
+      - Sin area_codigo asignado pero con rol restringido → NO VE NADA
+        (se fuerza al admin a configurar el area)
     """
-    # Roles con visibilidad total
-    if user.rol in ("superadmin", "admin_cliente", "secretaria", "asesor", "auditor", "consulta"):
+    if user.rol in _ROLES_VISION_TOTAL:
         return None
-    # Si tiene area_codigo, usar jerarquía
-    area = getattr(user, 'area_codigo', None)
-    if not area:
-        return None  # sin área asignada → ver todo (legacy)
-    return AREA_JERARQUIA.get(area, [area])
+
+    if user.rol in _ROLES_VISION_AREA:
+        area = getattr(user, 'area_codigo', None)
+        if not area:
+            # Rol restringido SIN area_codigo → NO VE NADA (en vez de ver todo).
+            # Esto cierra un hueco: antes retornaba None (ver todo) por compat.
+            logger.warning(
+                f"Usuario {user.email} (rol={user.rol}) sin area_codigo → "
+                f"visibilidad bloqueada. Asignar area_codigo al usuario."
+            )
+            return []
+        return AREA_JERARQUIA.get(area, [area])
+
+    # Rol desconocido → bloquear por defecto
+    logger.warning(f"Rol no reconocido: {user.rol} — bloqueando visibilidad.")
+    return []
+
+
+def _check_area_access(user: Usuario, doc) -> None:
+    """Verifica que el usuario tenga permiso de ver un documento específico por área.
+
+    Lanza ForbiddenError si no tiene acceso.
+    Usar en endpoints que obtienen un documento por ID directo.
+    """
+    areas_vis = _areas_visibles(user)
+    if areas_vis is None:
+        return  # ve todo
+    if not areas_vis:
+        raise ForbiddenError("No tiene acceso a documentos (área no asignada).")
+    doc_area = getattr(doc, 'area_turno', None)
+    # Docs sin turno pueden ser vistos si el estado es inicial (recibido/turnado)
+    if not doc_area:
+        if doc.estado in ("recibido", "turnado"):
+            return
+        raise ForbiddenError("No tiene acceso a este documento.")
+    if doc_area not in areas_vis:
+        raise ForbiddenError(
+            f"No tiene acceso a documentos del área '{doc_area}'. "
+            f"Áreas permitidas: {', '.join(areas_vis)}"
+        )
 
 
 # ---------- Listado ----------------------------------------------------------
@@ -682,6 +730,7 @@ async def obtener_documento(
     if not doc:
         raise NotFoundError("Documento no encontrado.")
     _assert_acceso(current_user, str(doc.cliente_id))
+    _check_area_access(current_user, doc)
     return doc
 
 
@@ -755,7 +804,103 @@ async def cambiar_estado(
                 f"Transiciones válidas desde '{doc.estado}': {', '.join(destinos_permitidos) or 'ninguna'}."
             )
 
-    updated = await crud_documento.update(db, db_obj=doc, obj_in={"estado": nuevo_estado})
+    update_payload: dict = {"estado": nuevo_estado}
+
+    # Auto-check Visto Bueno del Subdirector: si quien envía a firma (estado='respondido')
+    # es un subdirector, el visto bueno se marca automáticamente (elaboró y revisó él mismo)
+    if (
+        nuevo_estado == "respondido"
+        and current_user.rol == "subdirector"
+        and not doc.visto_bueno_subdirector
+    ):
+        from datetime import datetime, timezone
+        update_payload["visto_bueno_subdirector"] = True
+        update_payload["visto_bueno_subdirector_id"] = str(current_user.id)
+        update_payload["visto_bueno_subdirector_en"] = datetime.now(timezone.utc)
+        logger.info(
+            f"[VB-AUTO] Subdirector {current_user.email} envió a firma → "
+            f"visto bueno auto-marcado para doc {doc_id[:8]}..."
+        )
+
+    updated = await crud_documento.update(db, db_obj=doc, obj_in=update_payload)
+    return await crud_documento.get_with_relations(db, updated.id)
+
+
+# ---------- Cambiar tipo: respuesta ↔ conocimiento (Secretaría) --------------
+
+@router.post(
+    "/{doc_id}/cambiar-tipo-respuesta",
+    response_model=DocumentoResponse,
+    summary="Secretaría cambia si un oficio requiere respuesta o es solo de conocimiento",
+)
+async def cambiar_tipo_respuesta(
+    doc_id: str,
+    requiere_respuesta: bool = Body(..., embed=True, description="True = requiere respuesta, False = solo conocimiento"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    Permite a la Secretaría (o Director/Superadmin) cambiar si un oficio
+    requiere respuesta o pasarlo a solo conocimiento.
+
+    Reglas:
+    - True → False (requiere respuesta → conocimiento): permitido si no está
+      firmado. Cambia el estado a 'de_conocimiento' si estaba en recibido/turnado/en_atencion.
+    - False → True (conocimiento → requiere respuesta): permitido si está en
+      'de_conocimiento' y no fue archivado. Cambia a 'turnado' o 'en_atencion'.
+    - No aplica a documentos emitidos (solo flujo recibido).
+    """
+    if current_user.rol not in ("secretaria", "admin_cliente", "superadmin"):
+        raise ForbiddenError(
+            "Solo Secretaría, Director o Superadmin pueden cambiar el tipo de oficio."
+        )
+
+    doc = await crud_documento.get(db, doc_id)
+    if not doc:
+        raise NotFoundError("Documento no encontrado.")
+    _assert_acceso(current_user, str(doc.cliente_id))
+
+    if doc.flujo != "recibido":
+        raise BusinessError("Esta acción solo aplica a oficios recibidos.")
+
+    if doc.firmado_digitalmente or doc.estado in ("firmado", "archivado"):
+        raise BusinessError(
+            f"No se puede cambiar el tipo de un oficio ya firmado o archivado. Estado: {doc.estado}"
+        )
+
+    updates: dict = {"requiere_respuesta": requiere_respuesta}
+
+    # Reglas de transición automática de estado:
+    if not requiere_respuesta:
+        # → De conocimiento: pasar a estado de_conocimiento si está en flujo de atención
+        if doc.estado in ("recibido", "turnado", "en_atencion"):
+            updates["estado"] = "de_conocimiento"
+    else:
+        # → Requiere respuesta: si estaba en de_conocimiento, regresar a turnado/en_atencion
+        if doc.estado == "de_conocimiento":
+            # Si ya hay área turnada, va a en_atencion; si no, a turnado
+            updates["estado"] = "en_atencion" if doc.area_turno else "turnado"
+
+    from app.models.documento import HistorialDocumento
+
+    updated = await crud_documento.update(db, db_obj=doc, obj_in=updates)
+
+    # Registrar en historial
+    historial = HistorialDocumento(
+        documento_id=str(doc.id),
+        usuario_id=str(current_user.id),
+        tipo_accion="cambio_tipo_respuesta",
+        estado_anterior=doc.estado,
+        estado_nuevo=updates.get("estado", doc.estado),
+        observaciones=(
+            f"Secretaría cambió tipo: "
+            f"{'Requiere respuesta' if requiere_respuesta else 'Solo conocimiento'}"
+        ),
+        version=doc.version or 1,
+    )
+    db.add(historial)
+    await db.commit()
+
     return await crud_documento.get_with_relations(db, updated.id)
 
 

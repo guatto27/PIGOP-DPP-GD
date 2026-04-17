@@ -18,6 +18,7 @@ export interface Usuario {
   rol: 'superadmin' | 'admin_cliente' | 'secretaria' | 'analista' | 'consulta' | 'auditor' | 'asesor' | 'subdirector' | 'jefe_depto'
   activo: boolean
   cliente_id: string | null
+  area_codigo: string | null
   modulos_acceso: string[]
 }
 
