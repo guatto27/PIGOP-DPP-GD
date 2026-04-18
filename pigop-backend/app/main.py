@@ -16,12 +16,46 @@ UPLOADS_ROOT = Path(__file__).parent.parent / "uploads"
 UPLOADS_ROOT.mkdir(exist_ok=True)
 
 
+async def _reparar_inconsistencias_firma():
+    """Corrige documentos con firmado_digitalmente=True pero estado inconsistente.
+
+    Se ejecuta en startup de forma idempotente: si no hay inconsistencias no
+    hace nada. Reportes previos mostraron datos de seed/migraciones con
+    estado='respondido' mientras firmado_digitalmente=1 — eso es imposible
+    por flujo (una vez firmado, el estado debe ser 'firmado' para recibidos
+    o 'vigente' para emitidos).
+    """
+    from sqlalchemy import text
+    from app.core.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(text(
+            "UPDATE documentos_oficiales SET estado='firmado' "
+            "WHERE firmado_digitalmente=1 AND flujo='recibido' "
+            "AND estado NOT IN ('firmado','archivado')"
+        ))
+        n_rec = res.rowcount or 0
+        res = await db.execute(text(
+            "UPDATE documentos_oficiales SET estado='vigente' "
+            "WHERE firmado_digitalmente=1 AND flujo='emitido' "
+            "AND estado NOT IN ('vigente','archivado')"
+        ))
+        n_emi = res.rowcount or 0
+        if n_rec or n_emi:
+            await db.commit()
+            print(f"🔧 Integridad: corregidos {n_rec} recibidos y {n_emi} emitidos con estado inconsistente.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(f"🚀 {settings.APP_NAME} v{settings.APP_VERSION} iniciando...")
     # Crea/verifica todas las tablas (create_all es idempotente)
     await create_tables()
     print("✅ Tablas verificadas.")
+    # Reparación de integridad: estado ↔ firmado_digitalmente
+    try:
+        await _reparar_inconsistencias_firma()
+    except Exception as e:  # no bloquear arranque si la reparación falla
+        print(f"⚠️  Reparación de integridad omitida: {e}")
     yield
     print("👋 Apagando servidor...")
 

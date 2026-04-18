@@ -187,6 +187,17 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
         obj_in: DocumentoUpdate,
     ) -> DocumentoOficial:
         data = {k: v for k, v in obj_in.model_dump().items() if v is not None}
+
+        # Consistencia de estado vs. firmado_digitalmente:
+        # Si se está marcando el documento como firmado, el estado debe
+        # reflejarlo (recibidos → 'firmado', emitidos → 'vigente'). Evita
+        # quedar con estado='respondido' cuando el doc ya fue firmado.
+        if data.get("firmado_digitalmente") is True:
+            if db_obj.flujo == "recibido" and data.get("estado") not in ("firmado", "archivado"):
+                data["estado"] = "firmado"
+            elif db_obj.flujo == "emitido" and data.get("estado") not in ("vigente", "archivado"):
+                data["estado"] = "vigente"
+
         return await self.update(db, db_obj=db_obj, obj_in=data)
 
     async def registrar_ocr(

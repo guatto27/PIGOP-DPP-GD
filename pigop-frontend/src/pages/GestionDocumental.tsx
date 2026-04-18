@@ -1320,22 +1320,53 @@ function PanelRecibido({
   const canEnviarParaFirma = isArea || isAsesor || isSecretaria || isSuperadmin
   const canDescargarDocx = isDirector || isSuperadmin
   const canEliminar = isSecretaria || isSuperadmin
+  const canSubirArchivo = isSecretaria || isDirector || isSuperadmin
 
-  // Auto-cargar original al montar
-  useEffect(() => {
-    if (doc.url_storage && !originalUrl && !loadingOriginal) {
-      setLoadingOriginal(true)
-      documentosApi.obtenerArchivoOriginalUrl(doc.id)
-        .then(url => setOriginalUrl(url))
-        .catch(() => {})
-        .finally(() => setLoadingOriginal(false))
-    }
-  }, [doc.id, doc.url_storage])
+  // Estado de error del archivo original (si url_storage existe pero la
+  // descarga falla — archivo perdido en el servidor, permisos, etc.)
+  const [originalError, setOriginalError] = useState<string | null>(null)
+  // Subida de archivo desde la vista detalle
+  const [subiendoArchivo, setSubiendoArchivo] = useState(false)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['documentos'] })
     qc.invalidateQueries({ queryKey: ['documento', doc.id] })
     onRefetch()
+  }
+
+  const cargarOriginal = useCallback(() => {
+    if (!doc.url_storage) return
+    setLoadingOriginal(true)
+    setOriginalError(null)
+    documentosApi.obtenerArchivoOriginalUrl(doc.id)
+      .then(url => setOriginalUrl(url))
+      .catch((e: any) => {
+        setOriginalUrl(null)
+        setOriginalError(e?.response?.data?.detail || 'No se pudo cargar el archivo.')
+      })
+      .finally(() => setLoadingOriginal(false))
+  }, [doc.id, doc.url_storage])
+
+  // Auto-cargar original al montar
+  useEffect(() => {
+    if (doc.url_storage && !originalUrl && !loadingOriginal) {
+      cargarOriginal()
+    }
+  }, [doc.id, doc.url_storage, cargarOriginal, originalUrl, loadingOriginal])
+
+  const handleSubirArchivoOriginal = async (file: File) => {
+    setSubiendoArchivo(true)
+    try {
+      await documentosApi.uploadArchivo(doc.id, file)
+      setOriginalUrl(null)
+      setOriginalError(null)
+      invalidate()
+    } catch (e) {
+      window.alert('Error al subir archivo: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
+    } finally {
+      setSubiendoArchivo(false)
+    }
   }
 
   const [instruccionesTurno, setInstruccionesTurno] = useState('')
@@ -1687,38 +1718,87 @@ function PanelRecibido({
               </div>
             )}
 
-            {/* ── Visor del oficio original (duplicado en tab Datos) ── */}
-            {doc.url_storage && (
-              <div className="space-y-1.5">
+            {/* ── Visor del oficio original — siempre visible ── */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
                 <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                   <Eye size={10} /> Documento original
                 </p>
-                {loadingOriginal ? (
-                  <div className="flex items-center justify-center py-6 text-gray-400">
-                    <RotateCcw size={14} className="animate-spin mr-2" />
-                    <span className="text-xs">Cargando…</span>
-                  </div>
-                ) : originalUrl ? (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100" style={{ height: 450 }}>
-                    <iframe src={originalUrl} title="Oficio original" className="w-full h-full" style={{ border: 'none' }} />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-4 bg-gray-50 rounded-lg">
-                    <button onClick={() => {
-                      setLoadingOriginal(true)
-                      documentosApi.obtenerArchivoOriginalUrl(doc.id)
-                        .then(url => setOriginalUrl(url))
-                        .catch(() => {})
-                        .finally(() => setLoadingOriginal(false))
-                    }}
-                      className="text-xs text-gray-500 underline hover:text-gray-700">Cargar documento</button>
-                  </div>
-                )}
-                {doc.nombre_archivo && (
-                  <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
+                {canSubirArchivo && doc.url_storage && (
+                  <button
+                    onClick={() => uploadInputRef.current?.click()}
+                    disabled={subiendoArchivo}
+                    className="text-[10px] text-blue-600 hover:text-blue-800 underline disabled:opacity-50">
+                    Reemplazar archivo
+                  </button>
                 )}
               </div>
-            )}
+              <input
+                ref={uploadInputRef}
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleSubirArchivoOriginal(f); if (e.target) e.target.value = '' }}
+              />
+              {loadingOriginal ? (
+                <div className="flex items-center justify-center py-6 text-gray-400 bg-gray-50 rounded-lg">
+                  <RotateCcw size={14} className="animate-spin mr-2" />
+                  <span className="text-xs">Cargando…</span>
+                </div>
+              ) : originalUrl ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100" style={{ height: 450 }}>
+                  <iframe src={originalUrl} title="Oficio original" className="w-full h-full" style={{ border: 'none' }} />
+                </div>
+              ) : originalError ? (
+                <div className="flex flex-col items-center justify-center py-6 px-4 bg-red-50 border border-red-200 rounded-lg space-y-2">
+                  <AlertTriangle size={20} className="text-red-500" />
+                  <p className="text-xs text-red-700 text-center">{originalError}</p>
+                  <div className="flex gap-2">
+                    <button onClick={cargarOriginal}
+                      className="text-[10px] px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-100">
+                      Reintentar
+                    </button>
+                    {canSubirArchivo && (
+                      <button onClick={() => uploadInputRef.current?.click()}
+                        disabled={subiendoArchivo}
+                        className="text-[10px] px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                        {subiendoArchivo ? 'Subiendo…' : 'Subir de nuevo'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : !doc.url_storage ? (
+                /* No hay archivo: ofrecer subirlo a quien tenga permiso */
+                <div className="flex flex-col items-center justify-center py-6 px-4 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                  <FileText size={20} className="text-amber-600" />
+                  <p className="text-xs text-amber-800 text-center font-medium">
+                    Este oficio se registró sin archivo adjunto.
+                  </p>
+                  {canSubirArchivo ? (
+                    <button
+                      onClick={() => uploadInputRef.current?.click()}
+                      disabled={subiendoArchivo}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded-md text-white font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                      {subiendoArchivo
+                        ? <><RotateCcw size={12} className="animate-spin" /> Subiendo…</>
+                        : <><Upload size={12} /> Subir escaneo (PDF/JPG/PNG)</>}
+                    </button>
+                  ) : (
+                    <p className="text-[10px] text-amber-600 text-center">
+                      Solicita a Secretaría o Dirección adjuntar el escaneo.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-center py-4 bg-gray-50 rounded-lg">
+                  <button onClick={cargarOriginal}
+                    className="text-xs text-gray-500 underline hover:text-gray-700">Cargar documento</button>
+                </div>
+              )}
+              {doc.nombre_archivo && (
+                <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
+              )}
+            </div>
 
             {/* Remitente */}
             <div className="bg-gray-50 rounded-lg p-3 space-y-1">
@@ -1992,13 +2072,13 @@ function PanelRecibido({
         {/* ── Tab: IA (Oficio original + Generación con instrucciones) ──── */}
         {tab === 'ocr' && (
           <>
-            {/* ── Visor del oficio original (turnado) ── */}
-            {doc.url_storage && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
-                    <Eye size={10} /> Oficio original (turnado)
-                  </p>
+            {/* ── Visor del oficio original (turnado) — siempre visible ── */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                  <Eye size={10} /> Oficio original (turnado)
+                </p>
+                <div className="flex items-center gap-2">
                   {originalUrl && (
                     <button onClick={() => setVisorFlotante('original')}
                       className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded font-medium border border-gray-200 text-gray-500 hover:bg-gray-50"
@@ -2006,33 +2086,74 @@ function PanelRecibido({
                       <FolderOpen size={9} /> Ampliar
                     </button>
                   )}
+                  {canSubirArchivo && doc.url_storage && (
+                    <button
+                      onClick={() => uploadInputRef.current?.click()}
+                      disabled={subiendoArchivo}
+                      className="text-[10px] text-blue-600 hover:text-blue-800 underline disabled:opacity-50">
+                      Reemplazar
+                    </button>
+                  )}
                 </div>
-                {loadingOriginal ? (
-                  <div className="flex items-center justify-center py-8 text-gray-400">
-                    <RotateCcw size={16} className="animate-spin mr-2" />
-                    <span className="text-xs">Cargando documento original...</span>
-                  </div>
-                ) : originalUrl ? (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100" style={{ height: 450 }}>
-                    <iframe src={originalUrl} title="Oficio original" className="w-full h-full" style={{ border: 'none' }} />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-6 bg-gray-50 rounded-lg">
-                    <button onClick={() => {
-                      setLoadingOriginal(true)
-                      documentosApi.obtenerArchivoOriginalUrl(doc.id)
-                        .then(url => setOriginalUrl(url))
-                        .catch(() => {})
-                        .finally(() => setLoadingOriginal(false))
-                    }}
-                      className="text-xs text-gray-500 underline hover:text-gray-700">Cargar documento original</button>
-                  </div>
-                )}
-                {doc.nombre_archivo && (
-                  <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
-                )}
               </div>
-            )}
+              {loadingOriginal ? (
+                <div className="flex items-center justify-center py-8 text-gray-400 bg-gray-50 rounded-lg">
+                  <RotateCcw size={16} className="animate-spin mr-2" />
+                  <span className="text-xs">Cargando documento original...</span>
+                </div>
+              ) : originalUrl ? (
+                <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100" style={{ height: 450 }}>
+                  <iframe src={originalUrl} title="Oficio original" className="w-full h-full" style={{ border: 'none' }} />
+                </div>
+              ) : originalError ? (
+                <div className="flex flex-col items-center justify-center py-6 px-4 bg-red-50 border border-red-200 rounded-lg space-y-2">
+                  <AlertTriangle size={20} className="text-red-500" />
+                  <p className="text-xs text-red-700 text-center">{originalError}</p>
+                  <div className="flex gap-2">
+                    <button onClick={cargarOriginal}
+                      className="text-[10px] px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-100">
+                      Reintentar
+                    </button>
+                    {canSubirArchivo && (
+                      <button onClick={() => uploadInputRef.current?.click()}
+                        disabled={subiendoArchivo}
+                        className="text-[10px] px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                        {subiendoArchivo ? 'Subiendo…' : 'Subir de nuevo'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : !doc.url_storage ? (
+                <div className="flex flex-col items-center justify-center py-6 px-4 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                  <FileText size={20} className="text-amber-600" />
+                  <p className="text-xs text-amber-800 text-center font-medium">
+                    Este oficio se registró sin archivo adjunto.
+                  </p>
+                  {canSubirArchivo ? (
+                    <button
+                      onClick={() => uploadInputRef.current?.click()}
+                      disabled={subiendoArchivo}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded-md text-white font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                      {subiendoArchivo
+                        ? <><RotateCcw size={12} className="animate-spin" /> Subiendo…</>
+                        : <><Upload size={12} /> Subir escaneo (PDF/JPG/PNG)</>}
+                    </button>
+                  ) : (
+                    <p className="text-[10px] text-amber-600 text-center">
+                      Solicita a Secretaría o Dirección adjuntar el escaneo.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-center py-6 bg-gray-50 rounded-lg">
+                  <button onClick={cargarOriginal}
+                    className="text-xs text-gray-500 underline hover:text-gray-700">Cargar documento original</button>
+                </div>
+              )}
+              {doc.nombre_archivo && (
+                <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
+              )}
+            </div>
 
             {/* Upload scan (si no tiene archivo aún) */}
             {!doc.url_storage && (
@@ -3197,22 +3318,34 @@ function PanelEmitido({
   const canEliminar = isSecretaria || isSuperadmin
   const canEditar = doc.estado === 'borrador' || (doc.estado === 'en_revision' && canFirmar)
 
-  // Auto-cargar original al montar
-  useEffect(() => {
-    if (doc.url_storage && !originalUrl && !loadingOriginal) {
-      setLoadingOriginal(true)
-      documentosApi.obtenerArchivoOriginalUrl(doc.id)
-        .then(url => setOriginalUrl(url))
-        .catch(() => {})
-        .finally(() => setLoadingOriginal(false))
-    }
-  }, [doc.id, doc.url_storage])
+  // Error del archivo original (si url_storage existe pero la carga falla)
+  const [originalError, setOriginalError] = useState<string | null>(null)
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['documentos'] })
     qc.invalidateQueries({ queryKey: ['documento', doc.id] })
     onRefetch()
   }
+
+  const cargarOriginal = useCallback(() => {
+    if (!doc.url_storage) return
+    setLoadingOriginal(true)
+    setOriginalError(null)
+    documentosApi.obtenerArchivoOriginalUrl(doc.id)
+      .then(url => setOriginalUrl(url))
+      .catch((e: any) => {
+        setOriginalUrl(null)
+        setOriginalError(e?.response?.data?.detail || 'No se pudo cargar el archivo.')
+      })
+      .finally(() => setLoadingOriginal(false))
+  }, [doc.id, doc.url_storage])
+
+  // Auto-cargar original al montar
+  useEffect(() => {
+    if (doc.url_storage && !originalUrl && !loadingOriginal) {
+      cargarOriginal()
+    }
+  }, [doc.id, doc.url_storage, cargarOriginal, originalUrl, loadingOriginal])
 
   const guardarBorradorMutation = useMutation({
     mutationFn: () => documentosApi.update(doc.id, { borrador_respuesta: borradorText }),
@@ -3547,7 +3680,7 @@ function PanelEmitido({
                     <Eye size={10} /> Documento adjunto
                   </p>
                   {loadingOriginal ? (
-                    <div className="flex items-center justify-center py-6 text-gray-400">
+                    <div className="flex items-center justify-center py-6 text-gray-400 bg-gray-50 rounded-lg">
                       <RotateCcw size={14} className="animate-spin mr-2" />
                       <span className="text-xs">Cargando...</span>
                     </div>
@@ -3555,8 +3688,25 @@ function PanelEmitido({
                     <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100" style={{ height: 220 }}>
                       <iframe src={originalUrl} title="Documento adjunto" className="w-full h-full" style={{ border: 'none' }} />
                     </div>
+                  ) : originalError ? (
+                    <div className="flex flex-col items-center justify-center py-4 px-3 bg-red-50 border border-red-200 rounded-lg space-y-2">
+                      <AlertTriangle size={18} className="text-red-500" />
+                      <p className="text-[11px] text-red-700 text-center">{originalError}</p>
+                      <div className="flex gap-2">
+                        <button onClick={cargarOriginal}
+                          className="text-[10px] px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-100">
+                          Reintentar
+                        </button>
+                        {canEditar && (
+                          <button onClick={() => fileRefEmitido.current?.click()} disabled={uploading}
+                            className="text-[10px] px-2 py-1 rounded text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
+                            {uploading ? 'Subiendo…' : 'Subir de nuevo'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   ) : null}
-                  {canEditar && (
+                  {canEditar && !loadingOriginal && originalUrl && (
                     <div className="flex gap-2">
                       <button onClick={() => fileRefEmitido.current?.click()} disabled={uploading}
                         className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[10px] rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
@@ -4221,13 +4371,14 @@ export default function GestionDocumental() {
   useEffect(() => { setPage(0) }, [tab, busquedaDebounced, filtroEstado, filtroArea, fechaDesdeDebounced, fechaHastaDebounced, pageSize])
 
   // Columnas redimensionables
-  const { widths: colW, onMouseDown: onColResize } = useColumnResize('recibidos', [
+  const { widths: colW, onMouseDown: onColResize } = useColumnResize('recibidos-v2', [
     { key: 'oficio', defaultWidth: 130, minWidth: 80 },
     { key: 'asunto', defaultWidth: 220, minWidth: 120 },
     { key: 'remitente', defaultWidth: 130, minWidth: 80 },
     { key: 'area', defaultWidth: 110, minWidth: 60 },
     { key: 'upp', defaultWidth: 180, minWidth: 90 },
     { key: 'estado', defaultWidth: 100, minWidth: 70 },
+    { key: 'check', defaultWidth: 80, minWidth: 60 },
     { key: 'atencion', defaultWidth: 90, minWidth: 60 },
     { key: 'fecha', defaultWidth: 90, minWidth: 60 },
   ])
@@ -4950,6 +5101,7 @@ export default function GestionDocumental() {
                         ['area', 'Area', 'left'],
                         ['upp', 'UPP', 'left'],
                         ['estado', 'Estado', 'center'],
+                        ['check', 'V°B° Subdir.', 'center'],
                         ['atencion', 'Atención', 'left'],
                         ['fecha', 'Fecha', 'left'],
                       ] as const).map(([key, label, align]) => (
@@ -5041,7 +5193,7 @@ export default function GestionDocumental() {
                             })()}
                           </td>
                           <td className="px-3 py-2.5 text-center">
-                            <div className="flex items-center justify-center gap-1">
+                            <div className="flex items-center justify-center">
                               {cfg && (
                                 <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap"
                                   style={{ backgroundColor: cfg.bg, color: cfg.color }}>
@@ -5049,12 +5201,23 @@ export default function GestionDocumental() {
                                   {cfg.label}
                                 </span>
                               )}
-                              {doc.visto_bueno_subdirector && (
-                                <span className="inline-flex items-center text-[9px] text-green-600" title="Visto bueno del Subdirector">
-                                  <CheckCircle2 size={12} />
-                                </span>
-                              )}
                             </div>
+                          </td>
+                          {/* Columna V°B° del Subdirector: check verde si validó, guion cuando
+                              no aplica (doc todavía sin borrador o ya firmado), o círculo
+                              vacío cuando el subdirector aún debe marcar su V°B°. */}
+                          <td className="px-3 py-2.5 text-center">
+                            {doc.visto_bueno_subdirector ? (
+                              <span className="inline-flex items-center justify-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200 whitespace-nowrap" title="Visto bueno del Subdirector registrado">
+                                <CheckCircle2 size={12} /> V°B°
+                              </span>
+                            ) : ['respondido', 'en_atencion'].includes(doc.estado) && doc.has_borrador ? (
+                              <span className="inline-flex items-center justify-center text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap" title="Pendiente V°B° del Subdirector">
+                                Pendiente
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-300">—</span>
+                            )}
                           </td>
                           <td className="px-3 py-2.5">
                             <SemaforoAtencion fecha={doc.fecha_limite} estado={doc.estado} />
