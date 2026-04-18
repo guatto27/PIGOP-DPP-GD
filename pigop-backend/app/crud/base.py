@@ -62,8 +62,13 @@ class CRUDBase(Generic[ModelType]):
     async def update(
         self, db: AsyncSession, *, db_obj: ModelType, obj_in: dict
     ) -> ModelType:
+        # Aplica TODOS los campos del dict, incluyendo valores None.
+        # Las operaciones que quieran hacer un "borrado" de un campo (p.ej.
+        # "eliminar documento de referencia") dependen de que None se persista.
+        # Los callers que usen esto como "partial update" deben filtrar los
+        # None antes de llamar (ver `actualizar_documento` en CRUDDocumento).
         for field, value in obj_in.items():
-            if value is not None and hasattr(db_obj, field):
+            if hasattr(db_obj, field):
                 setattr(db_obj, field, value)
         db.add(db_obj)
         await db.flush()

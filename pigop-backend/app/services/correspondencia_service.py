@@ -99,6 +99,13 @@ AREAS_DPP = {
     "DIR":  {"nombre": "Dirección de Programación y Presupuesto",
              "titular": "Marco Antonio Flores Mejía",
              "cargo":   "Director de Programación y Presupuesto"},
+    # "SEC" representa la bandeja de la Secretaría del Director: cuando el Director
+    # instruye a su asistente (rol=secretaria) contestar un oficio en su nombre.
+    # SOLO el Director (o superadmin) puede turnar a esta bandeja — ninguna otra
+    # área tiene autoridad para asignar trabajo directamente a la secretaría.
+    "SEC":  {"nombre": "Secretaría de la Dirección",
+             "titular": "Secretaría del Director",
+             "cargo":   "Secretaría Particular del Director"},
     "SCG":  {"nombre": "Subdirección de Control del Ejercicio del Gasto",
              "titular": "Eduardo Cortés Jaramillo",
              "cargo":   "Subdirector de Control del Ejercicio del Gasto"},
@@ -575,7 +582,15 @@ REGLAS_TURNO = [
 ]
 
 # ── Prompt OCR oficial ─────────────────────────────────────────────────────────
-_PROMPT_OCR_OFICIO = """Eres un experto en lectura de correspondencia oficial del Gobierno del Estado de Michoacán.
+_PROMPT_OCR_OFICIO = """### INSTRUCCIÓN DE IDIOMA (MÁXIMA PRIORIDAD — NO NEGOCIABLE) ###
+Responde SIEMPRE Y ÚNICAMENTE EN ESPAÑOL (es-MX). PROHIBIDO cualquier contenido
+en inglés (incluso palabras sueltas como "Subject", "From", "Date", "Attached",
+"Memorandum", "Report", "Request", "Invoice", etc.). Si encuentras cualquiera
+de esas palabras en el documento, TRADÚCELAS al español antes de escribirlas
+en el JSON (p.ej. "Subject" → "Asunto"). Esta regla aplica a TODOS los campos,
+sin excepción, incluyendo resúmenes, descripciones, etiquetas y anexos.
+
+Eres un experto en lectura de correspondencia oficial del Gobierno del Estado de Michoacán.
 Analiza este documento oficial (oficio institucional) y extrae los datos en formato JSON estricto.
 
 IDIOMA OBLIGATORIO: TODA la información extraída, incluyendo resúmenes, descripciones, campos de texto
@@ -673,7 +688,14 @@ Responde ÚNICAMENTE con el JSON, sin texto adicional ni markdown. TODO el conte
 # ── Prompt generación de borrador (unificado para documentos recibidos) ────────
 # Basado en los modelos institucionales reales de la DPP.
 # Tres tipos de respuesta: positiva, negativa, informativa.
-_PROMPT_BORRADOR = """Eres redactor de oficios de la Dirección de Programación y Presupuesto (DPP),
+_PROMPT_BORRADOR = """### INSTRUCCIÓN DE IDIOMA (MÁXIMA PRIORIDAD — NO NEGOCIABLE) ###
+Redacta el oficio ÍNTEGRAMENTE EN ESPAÑOL (es-MX). PROHIBIDO cualquier palabra
+o frase en inglés. Si el documento de referencia adjunto contiene texto en
+inglés, TRADÚCELO al español antes de usarlo en la respuesta. Si no sabes una
+traducción, usa el término en español equivalente más cercano. Bajo ninguna
+circunstancia incluyas texto en inglés en el oficio final.
+
+Eres redactor de oficios de la Dirección de Programación y Presupuesto (DPP),
 Subsecretaría de Finanzas, Secretaría de Finanzas y Administración del Gobierno de Michoacán.
 El Director es el MTRO. MARCO ANTONIO FLORES MEJÍA.
 
@@ -727,7 +749,12 @@ Redacta ÚNICAMENTE el cuerpo del oficio de respuesta:"""
 
 
 # ── Prompt para oficios emitidos (documentos originados en DPP) ───────────────
-_PROMPT_BORRADOR_EMITIDO = """Eres redactor de oficios de la Dirección de Programación y Presupuesto (DPP),
+_PROMPT_BORRADOR_EMITIDO = """### INSTRUCCIÓN DE IDIOMA (MÁXIMA PRIORIDAD — NO NEGOCIABLE) ###
+Redacta el oficio ÍNTEGRAMENTE EN ESPAÑOL (es-MX). PROHIBIDO cualquier palabra
+o frase en inglés. Si el documento de referencia contiene texto en inglés,
+TRADÚCELO al español antes de usarlo en la respuesta.
+
+Eres redactor de oficios de la Dirección de Programación y Presupuesto (DPP),
 Subsecretaría de Finanzas, Secretaría de Finanzas y Administración del Gobierno de Michoacán.
 El Director es el MTRO. MARCO ANTONIO FLORES MEJÍA.
 

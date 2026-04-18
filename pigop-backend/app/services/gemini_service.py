@@ -78,6 +78,11 @@ Eres un analista experto en documentos presupuestarios del Gobierno del Estado d
 Analiza el siguiente texto extraído de un documento de tipo "{tipo_documento}" y extrae
 los campos relevantes en formato JSON estricto. Si un campo no existe, usa null.
 
+IDIOMA OBLIGATORIO: TODO el contenido del JSON (descripciones, conceptos, resúmenes,
+nombres, etiquetas y cualquier texto libre) DEBE estar en ESPAÑOL. NUNCA respondas en
+inglés, aunque el OCR produzca palabras en inglés o el documento sea ambiguo. Traduce
+cualquier término al español si fuera necesario.
+
 CONTEXTO IMPORTANTE sobre el DEPP (Documento de Ejecución Presupuestaria y Pago):
 El DEPP es generado por SAP GRP del Gobierno de Michoacán. Tiene dos tipos:
   - PAGO: genera movimiento financiero Y presupuestal (pago al proveedor/beneficiario)
@@ -337,10 +342,16 @@ class GeminiService:
             from google.genai import types
 
             prompt_text = (
+                f"Eres un analista de documentos del Gobierno del Estado de Michoacán. "
                 f"Extrae todos los datos relevantes de este documento "
                 f"de tipo {tipo_documento} en formato JSON estricto. "
                 f"Incluye: fecha, montos, nombres, RFC, número de documento, "
-                f"y cualquier dato relevante. Sin texto adicional."
+                f"y cualquier dato relevante. Sin texto adicional.\n\n"
+                f"IDIOMA OBLIGATORIO: TODO el contenido del JSON (descripciones, "
+                f"resúmenes, conceptos, nombres propios de instituciones y cualquier "
+                f"texto libre) DEBE estar en ESPAÑOL. NUNCA devuelvas texto en inglés, "
+                f"aunque el OCR produzca palabras en inglés o el documento tenga "
+                f"términos mezclados. Traduce al español lo que sea necesario."
             )
             resp = _gemini_client.models.generate_content(
                 model=self.model_vision,

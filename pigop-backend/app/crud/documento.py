@@ -401,8 +401,14 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
         *,
         cliente_id: Optional[str] = None,
         area_turno: Optional[str] = None,
+        area_turno_in: Optional[List[str]] = None,
     ) -> List[DocumentoOficial]:
-        """Lista documentos en estado 'devuelto' para el área responsable."""
+        """Lista documentos en estado 'devuelto' para el área responsable.
+
+        Respeta la visibilidad por área: si `area_turno_in` es una lista,
+        sólo se devuelven devoluciones cuyo área esté en esa lista. Si es
+        None, no se aplica filtro de área (usado para roles con visión total).
+        """
         stmt = select(DocumentoOficial).where(
             DocumentoOficial.estado == "devuelto"
         )
@@ -410,6 +416,11 @@ class CRUDDocumento(CRUDBase[DocumentoOficial]):
             stmt = stmt.where(DocumentoOficial.cliente_id == str(cliente_id))
         if area_turno:
             stmt = stmt.where(DocumentoOficial.area_turno == area_turno)
+        elif area_turno_in is not None:
+            # Lista vacía → bloquear completamente
+            if not area_turno_in:
+                return []
+            stmt = stmt.where(DocumentoOficial.area_turno.in_(area_turno_in))
         stmt = stmt.order_by(DocumentoOficial.devuelto_en.desc())
         result = await db.execute(stmt)
         return list(result.scalars().all())

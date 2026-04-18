@@ -6,7 +6,7 @@ import {
   Wand2, Send, AlertTriangle, Eye, Edit3, RotateCcw,
   ArrowRight, InboxIcon, SendIcon, Building2,
   Download, Shield, BookOpen, FileSignature,
-  History, CornerUpLeft, RefreshCw, Lock, Hash, Mail, ChevronLeft,
+  History, CornerUpLeft, RefreshCw, Lock, Hash, Mail, ChevronLeft, ChevronRight,
   ClipboardCheck, ArrowLeftRight,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -27,6 +27,7 @@ import {
 } from '../api/documentos'
 import { catalogoApi, type FuncionarioItem } from '../api/documentos'
 import { clientesApi } from '../api/depps'
+import { uppsApi, type UPP } from '../api/upps'
 import { useAuth } from '../hooks/useAuth'
 import { Button } from '../components/ui/Button'
 import { PageSpinner } from '../components/ui/Spinner'
@@ -1346,11 +1347,17 @@ function PanelRecibido({
     mutationFn: ({ cod, nom }: { cod: string; nom: string }) =>
       documentosApi.confirmarTurno(doc.id, cod, nom, instruccionesTurno || undefined),
     onSuccess: invalidate,
+    onError: (e: any) => {
+      window.alert(e?.response?.data?.detail || 'No se pudo turnar. Intenta de nuevo.')
+    },
   })
   const cambiarTurnoMutation = useMutation({
     mutationFn: ({ cod, nom }: { cod: string; nom: string }) =>
       documentosApi.cambiarTurno(doc.id, cod, nom, instruccionesCambioTurno || undefined),
     onSuccess: () => { invalidate(); setCambiarTurnoOpen(false); setInstruccionesCambioTurno('') },
+    onError: (e: any) => {
+      window.alert(e?.response?.data?.detail || 'No se pudo cambiar el turno. Intenta de nuevo.')
+    },
   })
 
   const estadoMutation = useMutation({
@@ -1750,6 +1757,20 @@ function PanelRecibido({
               </div>
             )}
 
+            {/* Guía del Director — banner con los 3 escenarios de atención */}
+            {isDirector && !doc.area_turno_confirmada && doc.estado !== 'firmado' && doc.estado !== 'archivado' && (
+              <div className="bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-200 rounded-lg p-3">
+                <p className="text-[11px] font-semibold text-[#911A3A] mb-2 flex items-center gap-1.5">
+                  <Wand2 size={12} /> Como Director tienes 3 opciones para atender este oficio:
+                </p>
+                <ol className="text-[10px] text-gray-700 space-y-1 list-decimal pl-4 leading-relaxed">
+                  <li><span className="font-semibold">Atenderlo tú mismo:</span> turna a <em>Dirección</em> y genera el borrador con IA o referencia.</li>
+                  <li><span className="font-semibold">Turnar a un área operativa:</span> selecciona la subdirección o departamento responsable.</li>
+                  <li><span className="font-semibold">Instruir a tu Secretaría:</span> turna a <em>Secretaría de la Dirección</em> para que conteste en tu nombre.</li>
+                </ol>
+              </div>
+            )}
+
             {/* Área de turno */}
             <div>
               <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Área de turno</p>
@@ -1769,6 +1790,18 @@ function PanelRecibido({
                   </div>
                   <p className="text-xs font-semibold text-blue-900">{doc.sugerencia_area_nombre}</p>
                   {fundamento && <p className="text-[10px] text-blue-600 mt-0.5 leading-tight">{fundamento}</p>}
+                </div>
+              )}
+
+              {/* Banner especial: asignado por el Director a su Secretaría */}
+              {doc.area_turno === 'SEC' && doc.area_turno_confirmada && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 mb-2">
+                  <p className="text-[10px] font-semibold text-purple-800 flex items-center gap-1.5">
+                    ✉️ Asignado por el Director a la Secretaría
+                  </p>
+                  <p className="text-[10px] text-purple-700 mt-1 leading-snug">
+                    El Director instruyó que la Secretaría redacte y tramite la respuesta en su nombre.
+                  </p>
                 </div>
               )}
 
@@ -1805,9 +1838,19 @@ function PanelRecibido({
                         onChange={e => setCambioAreaSelectValue(e.target.value)}
                       >
                         <option value="">— Seleccionar nueva área —</option>
-                        {areas.map(a => (
-                          <option key={a.codigo} value={a.codigo}>{a.nombre}</option>
-                        ))}
+                        {areas
+                          .slice()
+                          .sort((a, b) => {
+                            const ord = (c: string) => c === 'DIR' ? 0 : c === 'SEC' ? 1 : 2
+                            return ord(a.codigo) - ord(b.codigo)
+                          })
+                          .map(a => (
+                            <option key={a.codigo} value={a.codigo}>
+                              {a.codigo === 'DIR' ? '⚡ Dirección (atender directamente)'
+                                : a.codigo === 'SEC' ? '✉️ Secretaría (contestar en nombre del Director)'
+                                : a.nombre}
+                            </option>
+                          ))}
                       </select>
                       <textarea
                         className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-xs resize-none focus:ring-1 focus:ring-[#911A3A]/40 focus:border-[#911A3A] focus:outline-none"
@@ -1841,9 +1884,20 @@ function PanelRecibido({
                     onChange={e => setAreaSelectValue(e.target.value)}
                   >
                     <option value="">— Seleccionar área —</option>
-                    {areas.map(a => (
-                      <option key={a.codigo} value={a.codigo}>{a.nombre}</option>
-                    ))}
+                    {/* Opciones en orden útil: 1) Dirección (atender yo), 2) Secretaría, 3) áreas operativas */}
+                    {areas
+                      .slice()
+                      .sort((a, b) => {
+                        const ord = (c: string) => c === 'DIR' ? 0 : c === 'SEC' ? 1 : 2
+                        return ord(a.codigo) - ord(b.codigo)
+                      })
+                      .map(a => (
+                        <option key={a.codigo} value={a.codigo}>
+                          {a.codigo === 'DIR' ? '⚡ Dirección (atender directamente)'
+                            : a.codigo === 'SEC' ? '✉️ Secretaría (contestar en mi nombre)'
+                            : a.nombre}
+                        </option>
+                      ))}
                   </select>
                   {/* Instrucciones del Director al turnar */}
                   {isDirector && (
@@ -2684,8 +2738,14 @@ function PanelRecibido({
                     style={{ backgroundColor: GUINDA }}>
                     <FileSignature size={13} /> Firmar documento
                   </button>
+                ) : doc.estado === 'respondido' ? (
+                  <div className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg bg-amber-50 border border-amber-200 text-amber-700 font-medium">
+                    <Clock size={13} /> Ya enviado a firma del Director
+                  </div>
                 ) : (
                   <button onClick={async () => {
+                    // Guardia de idempotencia: evitar reenvíos cuando ya está en 'respondido'.
+                    if (doc.estado === 'respondido') { setEnviadoFirmaOk(true); return }
                     try {
                       await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
                       invalidate()
@@ -4153,7 +4213,7 @@ export default function GestionDocumental() {
     { key: 'asunto', defaultWidth: 220, minWidth: 120 },
     { key: 'remitente', defaultWidth: 130, minWidth: 80 },
     { key: 'area', defaultWidth: 110, minWidth: 60 },
-    { key: 'upp', defaultWidth: 80, minWidth: 50 },
+    { key: 'upp', defaultWidth: 180, minWidth: 90 },
     { key: 'estado', defaultWidth: 100, minWidth: 70 },
     { key: 'atencion', defaultWidth: 90, minWidth: 60 },
     { key: 'fecha', defaultWidth: 90, minWidth: 60 },
@@ -4163,6 +4223,56 @@ export default function GestionDocumental() {
     queryKey: ['areas-dpp'],
     queryFn:  documentosApi.areas,
   })
+
+  // Catálogo oficial de UPPs (Listado 2026) — se usa para mostrar "código - nombre"
+  // en la columna UPP del monitor. Sin esto, se muestra lo que venga del OCR
+  // (a veces un nombre de área/dirección que NO es una UPP real).
+  const { data: uppsCatalogo = [] } = useQuery<UPP[]>({
+    queryKey: ['upps-catalogo'],
+    queryFn:  () => uppsApi.list(),
+    staleTime: 10 * 60 * 1000,
+  })
+  const uppsByCode: Record<string, UPP> = {}
+  const uppsByName: Record<string, UPP> = {}
+  for (const u of uppsCatalogo) {
+    uppsByCode[u.codigo.toUpperCase()] = u
+    uppsByName[u.nombre.toLowerCase()] = u
+    if (u.sigla) uppsByName[u.sigla.toLowerCase()] = u
+  }
+  // Devuelve una etiqueta "NNN — Nombre" para una UPP a partir del código explícito
+  // (upp_solicitante_codigo) o el texto del OCR (upp_solicitante). Si ningún valor
+  // mapea contra el catálogo oficial, regresa null (→ se mostrará '—').
+  const formatUpp = (codigo: string | null | undefined, texto: string | null | undefined): string | null => {
+    // 1) Código explícito (si se guardó al registrar el documento)
+    if (codigo) {
+      const u = uppsByCode[codigo.toUpperCase().trim()]
+      if (u) return `${u.codigo} — ${u.nombre}`
+    }
+    // 2) Texto del OCR: puede ser un código "016" o un nombre/sigla
+    if (texto) {
+      const t = texto.trim()
+      // Buscar si es un código numérico/alfanumerico de UPP
+      const tCode = t.toUpperCase().replace(/^UPP\s*/i, '').replace(/[^A-Z0-9]/g, '')
+      if (tCode && uppsByCode[tCode]) {
+        const u = uppsByCode[tCode]
+        return `${u.codigo} — ${u.nombre}`
+      }
+      // Buscar si coincide con un nombre o sigla del catálogo
+      const tLower = t.toLowerCase()
+      if (uppsByName[tLower]) {
+        const u = uppsByName[tLower]
+        return `${u.codigo} — ${u.nombre}`
+      }
+      // Si el texto contiene un código al inicio: "016 - Secretaría..."
+      const m = t.match(/^\s*([A-Z0-9]{2,4})\b/i)
+      if (m && uppsByCode[m[1].toUpperCase()]) {
+        const u = uppsByCode[m[1].toUpperCase()]
+        return `${u.codigo} — ${u.nombre}`
+      }
+    }
+    // Sin coincidencia con el catálogo oficial → no mostrar áreas que NO son UPPs.
+    return null
+  }
 
   const { data: selectedDoc } = useQuery({
     queryKey: ['documento', selectedId],
@@ -4830,7 +4940,17 @@ export default function GestionDocumental() {
                             </p>
                           </td>
                           <td className="px-3 py-2.5">
-                            <p className="text-[10px] text-gray-400 truncate max-w-[80px]">{doc.upp_solicitante || '—'}</p>
+                            {(() => {
+                              const uppLabel = formatUpp(doc.upp_solicitante_codigo, doc.upp_solicitante)
+                              return (
+                                <p
+                                  className="text-[10px] text-gray-500 truncate max-w-[180px]"
+                                  title={uppLabel || (doc.upp_solicitante || '')}
+                                >
+                                  {uppLabel || '—'}
+                                </p>
+                              )
+                            })()}
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             <div className="flex items-center justify-center gap-1">
@@ -4889,7 +5009,7 @@ export default function GestionDocumental() {
                   </tbody>
                 </table>
                 {/* Paginación */}
-                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-gray-500">Mostrar</span>
                     <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
@@ -4900,12 +5020,20 @@ export default function GestionDocumental() {
                       <option value={25}>25</option>
                       <option value={50}>50</option>
                     </select>
-                    <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                    <span className="text-[10px] text-gray-500">
+                      de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}
+                      {totalPages > 1 && ` · Página ${page + 1} de ${totalPages}`}
+                    </span>
                   </div>
                   {totalPages > 1 && (
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-                        className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
+                      <button
+                        onClick={() => setPage(Math.max(0, page - 1))}
+                        disabled={page === 0}
+                        title="Página anterior"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                        <ChevronLeft size={11} /> Atrás
+                      </button>
                       {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
                         let p: number
                         if (totalPages <= 7) { p = i }
@@ -4919,8 +5047,13 @@ export default function GestionDocumental() {
                           </button>
                         )
                       })}
-                      <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
-                        className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
+                      <button
+                        onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
+                        disabled={page >= totalPages - 1}
+                        title="Página siguiente"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                        Adelante <ChevronRight size={11} />
+                      </button>
                     </div>
                   )}
                 </div>
@@ -4958,7 +5091,7 @@ export default function GestionDocumental() {
                     <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 130 }}>Destinatario</th>
                     <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 90 }}>Estado</th>
                     <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 80 }}>Fecha</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 70 }}>UPP</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold" style={{ width: 180 }}>UPP</th>
                     <th className="px-3 py-2.5 text-center text-xs font-semibold" style={{ width: 90 }}>Acuse</th>
                   </tr>
                 </thead>
@@ -4996,7 +5129,17 @@ export default function GestionDocumental() {
                           <span className="text-[10px] text-gray-400 whitespace-nowrap">{doc.fecha_documento ? formatDate(doc.fecha_documento) : doc.creado_en ? formatDate(doc.creado_en) : '—'}</span>
                         </td>
                         <td className="px-3 py-2.5">
-                          <p className="text-[10px] text-gray-400 truncate">{doc.upp_solicitante || '—'}</p>
+                          {(() => {
+                            const uppLabel = formatUpp(doc.upp_solicitante_codigo, doc.upp_solicitante)
+                            return (
+                              <p
+                                className="text-[10px] text-gray-500 truncate max-w-[180px]"
+                                title={uppLabel || (doc.upp_solicitante || '')}
+                              >
+                                {uppLabel || '—'}
+                              </p>
+                            )
+                          })()}
                         </td>
                         <td className="px-3 py-2.5 text-center">
                           {doc.acuse_recibido_url ? (

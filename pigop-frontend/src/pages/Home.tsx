@@ -217,6 +217,15 @@ export default function Home() {
     const conocimientoDireccion = docsRecibidos.filter(d =>
       d.estado === 'de_conocimiento' && d.area_turno === 'DIR'
     ).length
+    // Oficios que el Director instruyó a la Secretaría contestar (area_turno = SEC)
+    const instruidosASecretaria = docsRecibidos.filter(d =>
+      d.area_turno === 'SEC' &&
+      ['turnado', 'en_atencion'].includes(d.estado)
+    ).length
+    // Oficios emitidos en revisión pendientes de firma del Director
+    const emitidosEnRevisionDirector = docsEmitidos?.filter(d =>
+      d.estado === 'en_revision' && !d.firmado_digitalmente
+    ).length ?? 0
 
     return {
       recibidos: byEstado('recibido'),
@@ -230,6 +239,8 @@ export default function Home() {
       memosPendientes,
       turnadosADireccion,
       conocimientoDireccion,
+      instruidosASecretaria,
+      emitidosEnRevisionDirector,
       hoy,
       urgentes,
       vencidos,
@@ -254,14 +265,14 @@ export default function Home() {
     const items: { icon: typeof Clock; color: string; bg: string; border: string; text: string; action: () => void }[] = []
 
     if (docMetrics && hasDocModule) {
-      // Director: oficios turnados por secretaría para revisión directa
+      // Director: oficios turnados por Secretaría para revisión directa (Inbox del Director)
       if ((isDirector || isSuperadmin) && docMetrics.turnadosADireccion > 0) {
         items.push({
           icon: Inbox,
           color: 'text-purple-600',
           bg: 'bg-purple-50',
           border: 'border-purple-200',
-          text: `${docMetrics.turnadosADireccion} oficio${docMetrics.turnadosADireccion !== 1 ? 's' : ''} turnado${docMetrics.turnadosADireccion !== 1 ? 's' : ''} a Dirección para revisión`,
+          text: `Secretaría: ${docMetrics.turnadosADireccion} oficio${docMetrics.turnadosADireccion !== 1 ? 's' : ''} turnado${docMetrics.turnadosADireccion !== 1 ? 's' : ''} para tu revisión`,
           action: () => navigate('/gestion-documental'),
         })
       }
@@ -278,26 +289,38 @@ export default function Home() {
         })
       }
 
-      // Director: docs por firmar
+      // Director: docs recibidos listos para su firma (respondidos por un área)
       if (isDirector && docMetrics.respondidos > 0) {
         items.push({
           icon: FileSignature,
           color: 'text-amber-600',
           bg: 'bg-amber-50',
           border: 'border-amber-200',
-          text: `${docMetrics.respondidos} documento${docMetrics.respondidos !== 1 ? 's' : ''} pendiente${docMetrics.respondidos !== 1 ? 's' : ''} de firma`,
+          text: `${docMetrics.respondidos} oficio${docMetrics.respondidos !== 1 ? 's' : ''} respondido${docMetrics.respondidos !== 1 ? 's' : ''} pendiente${docMetrics.respondidos !== 1 ? 's' : ''} de tu firma`,
           action: () => navigate('/gestion-documental'),
         })
       }
 
-      // Director: emitidos pendientes de firma
-      if ((isDirector || isSuperadmin) && docMetrics.emitidosPendientesFirma > 0) {
+      // Director: oficios EMITIDOS por Secretaría o áreas, en revisión — pendientes de su firma
+      if ((isDirector || isSuperadmin) && docMetrics.emitidosEnRevisionDirector > 0) {
         items.push({
           icon: FileSignature,
           color: 'text-blue-600',
           bg: 'bg-blue-50',
           border: 'border-blue-200',
-          text: `${docMetrics.emitidosPendientesFirma} oficio${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} emitido${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} pendiente${docMetrics.emitidosPendientesFirma !== 1 ? 's' : ''} de firma`,
+          text: `${docMetrics.emitidosEnRevisionDirector} oficio${docMetrics.emitidosEnRevisionDirector !== 1 ? 's' : ''} emitido${docMetrics.emitidosEnRevisionDirector !== 1 ? 's' : ''} en revisión — pendiente${docMetrics.emitidosEnRevisionDirector !== 1 ? 's' : ''} de tu firma`,
+          action: () => navigate('/gestion-documental'),
+        })
+      }
+
+      // Secretaria: oficios que el Director le instruyó atender (area_turno = SEC)
+      if (isSecretaria && docMetrics.instruidosASecretaria > 0) {
+        items.push({
+          icon: Inbox,
+          color: 'text-purple-700',
+          bg: 'bg-purple-50',
+          border: 'border-purple-300',
+          text: `Director: ${docMetrics.instruidosASecretaria} oficio${docMetrics.instruidosASecretaria !== 1 ? 's' : ''} asignado${docMetrics.instruidosASecretaria !== 1 ? 's' : ''} para que contestes`,
           action: () => navigate('/gestion-documental'),
         })
       }

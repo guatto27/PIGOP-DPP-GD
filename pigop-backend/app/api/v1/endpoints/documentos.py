@@ -73,12 +73,25 @@ def _assert_acceso(current_user: Usuario, cliente_id: str) -> None:
 # Jerarquía de áreas DPP — cada área ve sus propias + departamentos subordinados
 AREA_JERARQUIA = {
     "DIR":  None,   # Director y Secretaría ven TODO (no se filtra)
+    "SEC":  None,   # Bandeja de Secretaría del Director — también ve todo (rol=secretaria)
     "SCG":  ["SCG", "DREP", "DCP"],     # Subdir. Control y Gasto → sus departamentos
     "SPF":  ["SPF", "DASP", "DFNP"],    # Subdir. Presupuesto y Finanzas → sus departamentos
     "DREP": ["DREP"],                     # Depto. solo se ve a sí mismo
     "DCP":  ["DCP"],
     "DASP": ["DASP"],
     "DFNP": ["DFNP"],
+}
+
+# Áreas cuya asignación está restringida por rol. Las áreas aquí listadas solo
+# pueden ser turnadas por los roles permitidos. El resto recibirá un 403.
+AREAS_ASIGNACION_RESTRINGIDA = {
+    "SEC": {
+        "roles_permitidos": {"admin_cliente", "superadmin"},
+        "mensaje": (
+            "Solo el Director puede instruir a la Secretaría a contestar un oficio. "
+            "Turna a tu subdirección o departamento responsable."
+        ),
+    },
 }
 
 # Roles con visibilidad total (ven todos los oficios)
@@ -125,6 +138,15 @@ def _check_area_access(user: Usuario, doc) -> None:
 
     Lanza ForbiddenError si no tiene acceso.
     Usar en endpoints que obtienen un documento por ID directo.
+
+    Reglas:
+      - Roles con visión total (Director, Secretaría, Superadmin, Asesor,
+        Auditor, Consulta): ven todo.
+      - Roles por área (Subdirector, Jefe de Depto, Analista): solo ven
+        documentos cuyo area_turno esté en su jerarquía.
+      - Documentos sin area_turno asignado (estado 'recibido') son triaje
+        inicial — solo los roles con visión total los ven. Los usuarios de
+        área NO ven documentos sin turnar.
     """
     areas_vis = _areas_visibles(user)
     if areas_vis is None:
@@ -132,11 +154,13 @@ def _check_area_access(user: Usuario, doc) -> None:
     if not areas_vis:
         raise ForbiddenError("No tiene acceso a documentos (área no asignada).")
     doc_area = getattr(doc, 'area_turno', None)
-    # Docs sin turno pueden ser vistos si el estado es inicial (recibido/turnado)
+    # Sin área turnada → documentación de triaje, no es para áreas operativas.
+    # Se bloquea explícitamente para subdirector/jefe_depto/analista.
     if not doc_area:
-        if doc.estado in ("recibido", "turnado"):
-            return
-        raise ForbiddenError("No tiene acceso a este documento.")
+        raise ForbiddenError(
+            "Este documento aún no ha sido turnado a un área. "
+            "Solo Secretaría y Dirección pueden verlo durante el triaje."
+        )
     if doc_area not in areas_vis:
         raise ForbiddenError(
             f"No tiene acceso a documentos del área '{doc_area}'. "
@@ -286,10 +310,16 @@ async def siguiente_folio(
 async def listar_areas(
     current_user: Usuario = Depends(get_current_active_user),
 ):
-    return [
-        {"codigo": k, **v}
-        for k, v in AREAS_DPP.items()
-    ]
+    # Las áreas con asignación restringida (p.ej. SEC) solo se devuelven a los
+    # roles autorizados — así el dropdown de "turnar a…" no le muestra la opción
+    # a subdirectores/jefes (refuerzo UX del guard del servidor).
+    resultado = []
+    for k, v in AREAS_DPP.items():
+        restric = AREAS_ASIGNACION_RESTRINGIDA.get(k)
+        if restric and current_user.rol not in restric["roles_permitidos"]:
+            continue
+        resultado.append({"codigo": k, **v})
+    return resultado
 
 
 # ---------- Catalogo de plantillas para emitidos ----------------------------
@@ -713,8 +743,14 @@ async def listar_devueltos(
     cliente_id = (
         None if current_user.rol == "superadmin" else str(current_user.cliente_id)
     )
+    # Aplicar filtro por áreas visibles (igual que en listar_documentos).
+    # Evita que un subdirector/jefe vea devoluciones de otra área.
+    areas_vis = _areas_visibles(current_user)
+    if area_turno and areas_vis and area_turno not in areas_vis:
+        area_turno = None  # sin acceso → no mostrar nada de esa área
     return await crud_documento.list_devueltos(
-        db, cliente_id=cliente_id, area_turno=area_turno
+        db, cliente_id=cliente_id, area_turno=area_turno,
+        area_turno_in=areas_vis if not area_turno else None,
     )
 
 
@@ -794,8 +830,15 @@ async def cambiar_estado(
             "Debe atenderse: En atención → Respondido → Firmado."
         )
 
-    # Validar transición de estado (superadmin puede hacer cualquier transición)
-    if current_user.rol != "superadmin":
+    # Detectar caso idempotente: el documento ya está en el estado destino
+    # (p.ej. el usuario reintenta "Enviar a firma" cuando ya se envió antes).
+    # En ese caso NO fallamos por transición inválida, pero aún permitimos
+    # aplicar side-effects puntuales (como el visto bueno del subdirector).
+    es_idempotente = nuevo_estado == doc.estado
+
+    # Validar transición de estado (superadmin puede hacer cualquier transición).
+    # La idempotencia se permite aunque "respondido → respondido" no esté en el mapa.
+    if current_user.rol != "superadmin" and not es_idempotente:
         mapa = TRANSICIONES_RECIBIDO if doc.flujo == "recibido" else TRANSICIONES_EMITIDO
         destinos_permitidos = mapa.get(doc.estado, [])
         if nuevo_estado not in destinos_permitidos:
@@ -804,10 +847,13 @@ async def cambiar_estado(
                 f"Transiciones válidas desde '{doc.estado}': {', '.join(destinos_permitidos) or 'ninguna'}."
             )
 
-    update_payload: dict = {"estado": nuevo_estado}
+    update_payload: dict = {} if es_idempotente else {"estado": nuevo_estado}
 
     # Auto-check Visto Bueno del Subdirector: si quien envía a firma (estado='respondido')
-    # es un subdirector, el visto bueno se marca automáticamente (elaboró y revisó él mismo)
+    # es un subdirector, el visto bueno se marca automáticamente (elaboró y revisó él mismo).
+    # Esto ocurre tanto cuando se transiciona a 'respondido' como cuando el documento ya
+    # está 'respondido' y el subdirector vuelve a confirmar — así el "check" siempre queda
+    # registrado cuando corresponde.
     if (
         nuevo_estado == "respondido"
         and current_user.rol == "subdirector"
@@ -821,6 +867,10 @@ async def cambiar_estado(
             f"[VB-AUTO] Subdirector {current_user.email} envió a firma → "
             f"visto bueno auto-marcado para doc {doc_id[:8]}..."
         )
+
+    # Si es idempotente y no hay side-effects pendientes, no hacemos UPDATE.
+    if not update_payload:
+        return await crud_documento.get_with_relations(db, doc.id)
 
     updated = await crud_documento.update(db, db_obj=doc, obj_in=update_payload)
     return await crud_documento.get_with_relations(db, updated.id)
@@ -1166,6 +1216,12 @@ async def confirmar_turno(
             f"Area invalida '{data.area_codigo}'. Validas: {', '.join(AREAS_DPP.keys())}"
         )
 
+    # Guardia: áreas con asignación restringida (p.ej. SEC = Secretaría del Director).
+    # Solo los roles permitidos pueden turnar hacia estas bandejas.
+    restric = AREAS_ASIGNACION_RESTRINGIDA.get(data.area_codigo)
+    if restric and current_user.rol not in restric["roles_permitidos"]:
+        raise ForbiddenError(restric["mensaje"])
+
     area_info = AREAS_DPP[data.area_codigo]
     updated = await crud_documento.confirmar_turno(
         db,
@@ -1204,6 +1260,27 @@ async def cambiar_turno(
         raise BusinessError(
             f"Área inválida '{data.area_codigo}'. Válidas: {', '.join(AREAS_DPP.keys())}"
         )
+
+    # Guardia: áreas con asignación restringida (p.ej. SEC = Secretaría del Director).
+    # Evita que subdirectores o jefes redirijan trabajo a la Secretaría del Director.
+    restric = AREAS_ASIGNACION_RESTRINGIDA.get(data.area_codigo)
+    if restric and current_user.rol not in restric["roles_permitidos"]:
+        raise ForbiddenError(restric["mensaje"])
+
+    # Regla adicional: áreas operativas (subdirector, jefe_depto, analista) solo
+    # pueden redirigir a su propia subárea o departamentos bajo su línea jerárquica,
+    # no a DIR ni a otras subdirecciones. Esto refuerza la compartimentación.
+    if current_user.rol in ("subdirector", "jefe_depto", "analista"):
+        user_area = getattr(current_user, "area_codigo", None)
+        permitidas = AREA_JERARQUIA.get(user_area, [user_area] if user_area else [])
+        if permitidas is None:
+            permitidas = []
+        if data.area_codigo not in permitidas:
+            raise ForbiddenError(
+                f"No puedes redirigir a '{data.area_codigo}'. Las áreas permitidas "
+                f"para tu rol son: {', '.join(permitidas) or 'ninguna'}. "
+                f"Solicita al Director o a la Secretaría reasignar fuera de tu área."
+            )
 
     # Registrar en historial el cambio de turno
     from app.models.documento import HistorialDocumento
