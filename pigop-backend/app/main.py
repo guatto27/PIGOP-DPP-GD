@@ -46,6 +46,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Expone X-Total-Count al navegador — sin esto, CORS oculta el header y el
+    # contador de la paginación llega en 0 desde el frontend.
+    expose_headers=["X-Total-Count"],
 )
 
 # ── Servir archivos locales (desarrollo) ──────────────────────────────────────

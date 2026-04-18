@@ -2738,23 +2738,24 @@ function PanelRecibido({
                     style={{ backgroundColor: GUINDA }}>
                     <FileSignature size={13} /> Firmar documento
                   </button>
-                ) : doc.estado === 'respondido' ? (
-                  <div className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg bg-amber-50 border border-amber-200 text-amber-700 font-medium">
-                    <Clock size={13} /> Ya enviado a firma del Director
-                  </div>
                 ) : (
                   <button onClick={async () => {
-                    // Guardia de idempotencia: evitar reenvíos cuando ya está en 'respondido'.
-                    if (doc.estado === 'respondido') { setEnviadoFirmaOk(true); return }
                     try {
+                      // Siempre ejecutable: si ya está 'respondido', el backend responde
+                      // idempotentemente (no falla), permitiendo re-confirmar envío tras
+                      // regenerar el borrador.
                       await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
                       invalidate()
                       setEnviadoFirmaOk(true)
+                      setTimeout(() => setEnviadoFirmaOk(false), 4000)
                     } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                   }}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
                     style={{ backgroundColor: GUINDA }}>
-                    <Send size={13} /> Enviar a firma del Director
+                    <Send size={13} />
+                    {doc.estado === 'respondido'
+                      ? 'Re-enviar a firma del Director'
+                      : 'Enviar a firma del Director'}
                   </button>
                 )}
               </div>
@@ -4185,8 +4186,20 @@ export default function GestionDocumental() {
     queryFn:  () => documentosApi.list(params),
   })
   const docs = queryResult?.items
-  const totalDocs = queryResult?.total ?? 0
-  const totalPages = Math.ceil(totalDocs / pageSize)
+  // Si el backend no expone X-Total-Count (p.ej. CORS strip), caemos en
+  // un estimado defensivo basado en el tamaño del page: así la paginación
+  // sigue funcionando aunque el header no llegue.
+  const totalFromHeader = queryResult?.total ?? 0
+  const pageCount = docs?.length ?? 0
+  const totalDocs = totalFromHeader > 0
+    ? totalFromHeader
+    : (page * pageSize) + pageCount + (pageCount >= pageSize ? 1 : 0)
+  const totalPages = Math.max(1, Math.ceil(totalDocs / pageSize))
+  // Hay más páginas si el backend lo confirma, o si la página actual vino llena
+  // (pista de que hay al menos una siguiente).
+  const hasNextPage = totalFromHeader > 0
+    ? page < totalPages - 1
+    : pageCount >= pageSize
 
   // Query separada SIN paginación para calcular métricas reales del tab
   // (los contadores deben reflejar carga TOTAL del usuario, no solo la página)
@@ -4232,18 +4245,67 @@ export default function GestionDocumental() {
     queryFn:  () => uppsApi.list(),
     staleTime: 10 * 60 * 1000,
   })
+  // Normalizador: minúsculas, sin acentos, sin puntuación, colapsa espacios.
+  // Se usa para matching fuzzy del catálogo UPP contra el remitente del OCR.
+  const normalizeText = (s: string): string =>
+    s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
   const uppsByCode: Record<string, UPP> = {}
   const uppsByName: Record<string, UPP> = {}
+  const uppsNorm: Array<{ u: UPP; nombreN: string; siglaN: string | null }> = []
   for (const u of uppsCatalogo) {
     uppsByCode[u.codigo.toUpperCase()] = u
     uppsByName[u.nombre.toLowerCase()] = u
     if (u.sigla) uppsByName[u.sigla.toLowerCase()] = u
+    uppsNorm.push({
+      u,
+      nombreN: normalizeText(u.nombre),
+      siglaN: u.sigla ? normalizeText(u.sigla) : null,
+    })
   }
-  // Devuelve una etiqueta "NNN — Nombre" para una UPP a partir del código explícito
-  // (upp_solicitante_codigo) o el texto del OCR (upp_solicitante). Si ningún valor
-  // mapea contra el catálogo oficial, regresa null (→ se mostrará '—').
-  const formatUpp = (codigo: string | null | undefined, texto: string | null | undefined): string | null => {
-    // 1) Código explícito (si se guardó al registrar el documento)
+
+  // Busca la mejor UPP contra un texto libre (por ejemplo, "SUBSECRETARIA DE
+  // FINANZAS Y ADMINISTRACIÓN" debe mapear a UPP 007 "Secretaría de Finanzas y
+  // Administración"). Devuelve la UPP con mejor score o null si no hay match.
+  const fuzzyFindUpp = (texto: string): UPP | null => {
+    const tN = normalizeText(texto)
+    if (!tN || tN.length < 3) return null
+    // 1) Match exacto por nombre o sigla normalizados
+    for (const { u, nombreN, siglaN } of uppsNorm) {
+      if (nombreN === tN) return u
+      if (siglaN && siglaN === tN) return u
+    }
+    // 2) Contención: uno contiene al otro (cubre abreviaciones comunes tipo
+    //    "SUBSECRETARIA DE FINANZAS..." ↔ "Secretaría de Finanzas y Administración")
+    const tTokens = tN.split(' ').filter(w => w.length >= 4)
+    let best: { u: UPP; score: number } | null = null
+    for (const { u, nombreN } of uppsNorm) {
+      const nTokens = nombreN.split(' ').filter(w => w.length >= 4)
+      if (!nTokens.length) continue
+      // Cuenta tokens significativos en común
+      const comunes = tTokens.filter(t => nTokens.some(n => n === t || n.includes(t) || t.includes(n)))
+      const score = comunes.length / Math.max(nTokens.length, tTokens.length)
+      if (score >= 0.5 && (!best || score > best.score)) {
+        best = { u, score }
+      }
+    }
+    return best ? best.u : null
+  }
+
+  // Devuelve una etiqueta "NNN — Nombre" para una UPP a partir del código explícito,
+  // el texto de OCR en upp_solicitante, o el remitente (remitente_dependencia /
+  // dependencia_origen). El remitente suele ser la institución externa que envía
+  // el oficio y casi siempre corresponde a una UPP del catálogo.
+  const formatUpp = (
+    codigo: string | null | undefined,
+    texto: string | null | undefined,
+    remitente?: string | null,
+  ): string | null => {
+    // 1) Código explícito guardado en la BD
     if (codigo) {
       const u = uppsByCode[codigo.toUpperCase().trim()]
       if (u) return `${u.codigo} — ${u.nombre}`
@@ -4251,26 +4313,31 @@ export default function GestionDocumental() {
     // 2) Texto del OCR: puede ser un código "016" o un nombre/sigla
     if (texto) {
       const t = texto.trim()
-      // Buscar si es un código numérico/alfanumerico de UPP
       const tCode = t.toUpperCase().replace(/^UPP\s*/i, '').replace(/[^A-Z0-9]/g, '')
       if (tCode && uppsByCode[tCode]) {
         const u = uppsByCode[tCode]
         return `${u.codigo} — ${u.nombre}`
       }
-      // Buscar si coincide con un nombre o sigla del catálogo
       const tLower = t.toLowerCase()
       if (uppsByName[tLower]) {
         const u = uppsByName[tLower]
         return `${u.codigo} — ${u.nombre}`
       }
-      // Si el texto contiene un código al inicio: "016 - Secretaría..."
       const m = t.match(/^\s*([A-Z0-9]{2,4})\b/i)
       if (m && uppsByCode[m[1].toUpperCase()]) {
         const u = uppsByCode[m[1].toUpperCase()]
         return `${u.codigo} — ${u.nombre}`
       }
+      // Intentar match fuzzy contra el nombre (p.ej. "SFA" → UPP 007)
+      const fz = fuzzyFindUpp(t)
+      if (fz) return `${fz.codigo} — ${fz.nombre}`
     }
-    // Sin coincidencia con el catálogo oficial → no mostrar áreas que NO son UPPs.
+    // 3) Como último recurso, intentar con el remitente (dependencia que envía el
+    //    oficio). La mayoría de los oficios vienen de instituciones del catálogo.
+    if (remitente) {
+      const fz = fuzzyFindUpp(remitente)
+      if (fz) return `${fz.codigo} — ${fz.nombre}`
+    }
     return null
   }
 
@@ -4540,28 +4607,40 @@ export default function GestionDocumental() {
                 </tbody>
               </table>
               {/* Paginación */}
-              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-gray-500">Mostrar</span>
                   <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
                     className="text-[10px] border border-gray-300 rounded px-1.5 py-0.5 bg-white">
                     <option value={5}>5</option><option value={10}>10</option><option value={15}>15</option><option value={25}>25</option>
                   </select>
-                  <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                  <span className="text-[10px] text-gray-500">
+                    {totalFromHeader > 0
+                      ? <>de {totalDocs} registro{totalDocs !== 1 ? 's' : ''} · Página {page + 1} de {totalPages}</>
+                      : <>Página {page + 1}{pageCount ? ` · ${pageCount} registro${pageCount !== 1 ? 's' : ''}` : ''}</>}
+                  </span>
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
-                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                      let p: number
-                      if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
-                      return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
-                    })}
-                    <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
-                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
-                  </div>
-                )}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage(Math.max(0, page - 1))}
+                    disabled={page === 0}
+                    title="Página anterior"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                    <ChevronLeft size={11} /> Atrás
+                  </button>
+                  {totalPages > 1 && Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let p: number
+                    if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
+                    return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
+                  })}
+                  <button
+                    onClick={() => setPage(page + 1)}
+                    disabled={!hasNextPage}
+                    title="Página siguiente"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                    Adelante <ChevronRight size={11} />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -4941,11 +5020,15 @@ export default function GestionDocumental() {
                           </td>
                           <td className="px-3 py-2.5">
                             {(() => {
-                              const uppLabel = formatUpp(doc.upp_solicitante_codigo, doc.upp_solicitante)
+                              const uppLabel = formatUpp(
+                                doc.upp_solicitante_codigo,
+                                doc.upp_solicitante,
+                                doc.remitente_dependencia,
+                              )
                               return (
                                 <p
                                   className="text-[10px] text-gray-500 truncate max-w-[180px]"
-                                  title={uppLabel || (doc.upp_solicitante || '')}
+                                  title={uppLabel || (doc.remitente_dependencia || doc.upp_solicitante || '')}
                                 >
                                   {uppLabel || '—'}
                                 </p>
@@ -5021,41 +5104,40 @@ export default function GestionDocumental() {
                       <option value={50}>50</option>
                     </select>
                     <span className="text-[10px] text-gray-500">
-                      de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}
-                      {totalPages > 1 && ` · Página ${page + 1} de ${totalPages}`}
+                      {totalFromHeader > 0
+                        ? <>de {totalDocs} registro{totalDocs !== 1 ? 's' : ''} · Página {page + 1} de {totalPages}</>
+                        : <>Página {page + 1}{pageCount ? ` · ${pageCount} registro${pageCount !== 1 ? 's' : ''}` : ''}</>}
                     </span>
                   </div>
-                  {totalPages > 1 && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => setPage(Math.max(0, page - 1))}
-                        disabled={page === 0}
-                        title="Página anterior"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
-                        <ChevronLeft size={11} /> Atrás
-                      </button>
-                      {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                        let p: number
-                        if (totalPages <= 7) { p = i }
-                        else if (page < 3) { p = i }
-                        else if (page > totalPages - 4) { p = totalPages - 7 + i }
-                        else { p = page - 3 + i }
-                        return (
-                          <button key={p} onClick={() => setPage(p)}
-                            className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>
-                            {p + 1}
-                          </button>
-                        )
-                      })}
-                      <button
-                        onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
-                        disabled={page >= totalPages - 1}
-                        title="Página siguiente"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
-                        Adelante <ChevronRight size={11} />
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setPage(Math.max(0, page - 1))}
+                      disabled={page === 0}
+                      title="Página anterior"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                      <ChevronLeft size={11} /> Atrás
+                    </button>
+                    {totalPages > 1 && Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                      let p: number
+                      if (totalPages <= 7) { p = i }
+                      else if (page < 3) { p = i }
+                      else if (page > totalPages - 4) { p = totalPages - 7 + i }
+                      else { p = page - 3 + i }
+                      return (
+                        <button key={p} onClick={() => setPage(p)}
+                          className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>
+                          {p + 1}
+                        </button>
+                      )
+                    })}
+                    <button
+                      onClick={() => setPage(page + 1)}
+                      disabled={!hasNextPage}
+                      title="Página siguiente"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                      Adelante <ChevronRight size={11} />
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -5130,11 +5212,15 @@ export default function GestionDocumental() {
                         </td>
                         <td className="px-3 py-2.5">
                           {(() => {
-                            const uppLabel = formatUpp(doc.upp_solicitante_codigo, doc.upp_solicitante)
+                            const uppLabel = formatUpp(
+                              doc.upp_solicitante_codigo,
+                              doc.upp_solicitante,
+                              doc.dependencia_destino ?? doc.remitente_dependencia,
+                            )
                             return (
                               <p
                                 className="text-[10px] text-gray-500 truncate max-w-[180px]"
-                                title={uppLabel || (doc.upp_solicitante || '')}
+                                title={uppLabel || (doc.dependencia_destino || doc.upp_solicitante || '')}
                               >
                                 {uppLabel || '—'}
                               </p>
@@ -5163,28 +5249,40 @@ export default function GestionDocumental() {
                 </tbody>
               </table>
               {/* Paginación emitidos */}
-              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-gray-500">Mostrar</span>
                   <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
                     className="text-[10px] border border-gray-300 rounded px-1.5 py-0.5 bg-white">
                     <option value={5}>5</option><option value={10}>10</option><option value={15}>15</option><option value={25}>25</option>
                   </select>
-                  <span className="text-[10px] text-gray-500">de {totalDocs} registro{totalDocs !== 1 ? 's' : ''}</span>
+                  <span className="text-[10px] text-gray-500">
+                    {totalFromHeader > 0
+                      ? <>de {totalDocs} registro{totalDocs !== 1 ? 's' : ''} · Página {page + 1} de {totalPages}</>
+                      : <>Página {page + 1}{pageCount ? ` · ${pageCount} registro${pageCount !== 1 ? 's' : ''}` : ''}</>}
+                  </span>
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&lt;</button>
-                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                      let p: number
-                      if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
-                      return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
-                    })}
-                    <button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1}
-                      className="px-2 py-0.5 text-[10px] rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-100">&gt;</button>
-                  </div>
-                )}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage(Math.max(0, page - 1))}
+                    disabled={page === 0}
+                    title="Página anterior"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                    <ChevronLeft size={11} /> Atrás
+                  </button>
+                  {totalPages > 1 && Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let p: number
+                    if (totalPages <= 7) { p = i } else if (page < 3) { p = i } else if (page > totalPages - 4) { p = totalPages - 7 + i } else { p = page - 3 + i }
+                    return (<button key={p} onClick={() => setPage(p)} className={clsx('px-2 py-0.5 text-[10px] rounded border', p === page ? 'bg-[#911A3A] text-white border-[#911A3A]' : 'border-gray-300 hover:bg-gray-100')}>{p + 1}</button>)
+                  })}
+                  <button
+                    onClick={() => setPage(page + 1)}
+                    disabled={!hasNextPage}
+                    title="Página siguiente"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] rounded-md border font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-[#911A3A]/30 text-[#911A3A] hover:bg-[#911A3A]/10">
+                    Adelante <ChevronRight size={11} />
+                  </button>
+                </div>
               </div>
             </div>
           )}
