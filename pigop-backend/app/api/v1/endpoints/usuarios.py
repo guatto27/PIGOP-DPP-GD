@@ -52,7 +52,7 @@ async def listar_clientes(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(get_current_admin),
+    _: Usuario = Depends(get_current_active_user),
 ):
     return await crud_cliente.get_multi(db, skip=skip, limit=limit)
 
@@ -65,7 +65,7 @@ async def listar_clientes(
 async def obtener_cliente(
     cliente_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _: Usuario = Depends(get_current_admin),
+    _: Usuario = Depends(get_current_active_user),
 ):
     cliente = await crud_cliente.get(db, cliente_id)
     if not cliente:

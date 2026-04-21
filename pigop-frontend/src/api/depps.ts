@@ -1,6 +1,8 @@
 import apiClient from './client'
 import type { DEPP, DEPPCreate, DEPPListItem, UploadResponse, Cliente } from '../types'
 
+export type { Cliente }
+
 export const deppsApi = {
   // ── Listado y CRUD ─────────────────────────────────────────────────────────
 

@@ -159,6 +159,8 @@ class DocumentoListResponse(BaseModel):
     acuse_recibido_nombre: Optional[str] = None
     acuse_recibido_fecha:  Optional[str] = None
     visto_bueno_subdirector: Optional[bool] = False
+    visto_bueno_subdirector_id: Optional[str] = None
+    visto_bueno_subdirector_en: Optional[datetime] = None
     upp_solicitante:  Optional[str] = None
     tipo_memorandum:  Optional[str] = None
     dependencia_solicitante: Optional[str] = None

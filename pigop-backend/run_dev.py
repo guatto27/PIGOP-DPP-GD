@@ -7,6 +7,14 @@ y siembra el catálogo inicial de reglas normativas.
 """
 import sys, os, uuid
 
+# Forzar UTF-8 en la salida estándar (necesario en Windows con consola cp1252)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ── Cargar .env primero (preservar valores reales, ej: GEMINI_API_KEY) ────────

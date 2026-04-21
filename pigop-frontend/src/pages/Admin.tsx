@@ -7,12 +7,13 @@
  *
  * Acceso: superadmin y admin_cliente
  */
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Users, Building2, Plus, ToggleLeft, ToggleRight,
   Shield, UserCheck, Eye, Loader2, X, AlertCircle,
-  KeyRound, RefreshCw, Search, ChevronDown,
+  KeyRound, RefreshCw, Search, ChevronDown, Lock,
+  Upload, CheckCircle2,
 } from 'lucide-react'
 import {
   usuariosApi, clientesAdminApi,
@@ -22,11 +23,179 @@ import {
 } from '../api/usuarios'
 import { useAuth } from '../hooks/useAuth'
 import { formatDate } from '../utils'
+import { TablaPermisos } from './AdminPermisos'
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 const GUINDA = '#911A3A'
 const ROLES = ['superadmin', 'admin_cliente', 'secretaria', 'analista', 'consulta'] as const
 const TIPOS_CLIENTE = ['centralizada', 'paraestatal', 'autonoma', 'poder'] as const
+const TIPOS_VALIDOS_IMPORT = ['centralizada', 'paraestatal', 'autonoma', 'poder'] as const
+
+// ── Importación Excel/CSV ──────────────────────────────────────────────────────
+
+type FilaImport = { codigo_upp: string; nombre: string; tipo: string }
+
+function colLetterToIndex(letters: string): number {
+  let col = 0
+  for (const ch of letters) col = col * 26 + (ch.charCodeAt(0) - 64)
+  return col - 1
+}
+
+/** Extrae el texto entre la primera aparición de <tag...> y </tag> */
+function xmlInner(chunk: string, tag: string): string {
+  const open = chunk.indexOf(`<${tag}`)
+  if (open === -1) return ''
+  const closeTag = chunk.indexOf('>', open)
+  if (closeTag === -1) return ''
+  const end = chunk.indexOf(`</${tag}>`, closeTag)
+  if (end === -1) return ''
+  return chunk.substring(closeTag + 1, end)
+}
+
+/** Extrae el valor de un atributo name="value" dentro de una cadena */
+function xmlAttr(chunk: string, name: string): string {
+  const needle = `${name}="`
+  const s = chunk.indexOf(needle)
+  if (s === -1) return ''
+  const e = chunk.indexOf('"', s + needle.length)
+  if (e === -1) return ''
+  return chunk.substring(s + needle.length, e)
+}
+
+/** Decodifica entidades XML básicas */
+function xmlDecode(s: string): string {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#xD;/g, '')
+}
+
+async function parsearArchivoImport(file: File): Promise<FilaImport[]> {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+
+  // ── CSV ──────────────────────────────────────────────────────────────────────
+  if (ext === 'csv') {
+    const text = await file.text()
+    const delim = text.includes(';') ? ';' : ','
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+    const firstCols = lines[0]?.split(delim).map(c => c.trim().toLowerCase().replace(/^"|"$/g, ''))
+    const start = firstCols?.some(c => c.includes('codigo') || c.includes('nombre') || c.includes('upp')) ? 1 : 0
+    const rows: FilaImport[] = []
+    for (let i = start; i < lines.length; i++) {
+      const cols = lines[i].split(delim).map(c => c.trim().replace(/^"|"$/g, ''))
+      const codigo = cols[0] ?? ''
+      const nombre = cols[1] ?? ''
+      if (!codigo && !nombre) continue
+      const tipo = (cols[2] ?? '').toLowerCase()
+      rows.push({ codigo_upp: codigo, nombre, tipo: (TIPOS_VALIDOS_IMPORT as readonly string[]).includes(tipo) ? tipo : 'centralizada' })
+    }
+    return rows
+  }
+
+  // ── XLSX / XLS ────────────────────────────────────────────────────────────────
+  if (ext === 'xlsx' || ext === 'xls') {
+    const JSZip = (await import('jszip')).default
+    const ab = await file.arrayBuffer()
+    const zip = await JSZip.loadAsync(ab)
+
+    // ── Shared strings: split por <si> para evitar backtracking ──────────────
+    const ssXml = (await zip.file('xl/sharedStrings.xml')?.async('text')) ?? ''
+    const sharedStrings: string[] = []
+    const siParts = ssXml.split('<si>')
+    for (let i = 1; i < siParts.length; i++) {
+      const siChunk = siParts[i].split('</si>')[0]
+      // Concatena todos los <t>…</t> dentro del <si>
+      let combined = ''
+      const tParts = siChunk.split('<t')
+      for (let j = 1; j < tParts.length; j++) {
+        const tChunk = tParts[j]
+        const gt = tChunk.indexOf('>')
+        const lt = tChunk.indexOf('</t>')
+        if (gt !== -1 && lt > gt) combined += tChunk.substring(gt + 1, lt)
+      }
+      sharedStrings.push(xmlDecode(combined))
+    }
+
+    // ── Sheet XML: split por <row para evitar backtracking ────────────────────
+    const sheetXml = (await zip.file('xl/worksheets/sheet1.xml')?.async('text')) ?? ''
+    const grid = new Map<number, string[]>()
+    let maxRow = 0
+
+    const rowParts = sheetXml.split('<row')
+    for (let ri = 1; ri < rowParts.length; ri++) {
+      const rowChunk = rowParts[ri]
+      const rVal = xmlAttr(rowChunk, 'r')
+      if (!rVal) continue
+      const rowIdx = parseInt(rVal) - 1
+      if (rowIdx > maxRow) maxRow = rowIdx
+
+      const cells: string[] = []
+      // Contenido hasta </row>
+      const rowContent = rowChunk.split('</row>')[0]
+
+      // Split por <c (inicio de celda)
+      const cellParts = rowContent.split('<c ')
+      for (let ci = 1; ci < cellParts.length; ci++) {
+        const cellChunk = cellParts[ci]
+
+        // Referencia de celda: r="B3" → extraer letras
+        const ref = xmlAttr(cellChunk, 'r')
+        if (!ref) continue
+        const letters = ref.replace(/[0-9]/g, '')
+        const col = colLetterToIndex(letters)
+
+        // Tipo de celda: t="s" | t="str" | t="inlineStr" | (vacío = número)
+        const type = xmlAttr(cellChunk, 't')
+
+        let val = ''
+
+        if (type === 'inlineStr') {
+          // <is><t>…</t></is>
+          const isStart = cellChunk.indexOf('<is>')
+          if (isStart !== -1) {
+            const tStart = cellChunk.indexOf('<t', isStart)
+            if (tStart !== -1) {
+              const gt = cellChunk.indexOf('>', tStart)
+              const lt = cellChunk.indexOf('</t>', gt)
+              if (gt !== -1 && lt > gt) val = xmlDecode(cellChunk.substring(gt + 1, lt))
+            }
+          }
+        } else {
+          // <v>…</v>
+          const vOpen = cellChunk.indexOf('<v>')
+          const vClose = cellChunk.indexOf('</v>')
+          if (vOpen !== -1 && vClose > vOpen) {
+            const raw = cellChunk.substring(vOpen + 3, vClose)
+            val = type === 's' ? (sharedStrings[parseInt(raw)] ?? '') : raw
+          }
+        }
+
+        while (cells.length <= col) cells.push('')
+        cells[col] = val
+      }
+      grid.set(rowIdx, cells)
+    }
+
+    if (grid.size === 0) return []
+
+    const firstRow = grid.get(0) ?? []
+    const hasHeaders = firstRow.some(c =>
+      c.toLowerCase().includes('codigo') || c.toLowerCase().includes('nombre') || c.toLowerCase().includes('upp'),
+    )
+
+    const result: FilaImport[] = []
+    for (let i = hasHeaders ? 1 : 0; i <= maxRow; i++) {
+      const row = grid.get(i) ?? []
+      const codigo = (row[0] ?? '').trim()
+      const nombre = (row[1] ?? '').trim()
+      if (!codigo && !nombre) continue
+      const tipo = (row[2] ?? '').trim().toLowerCase()
+      result.push({ codigo_upp: codigo, nombre, tipo: (TIPOS_VALIDOS_IMPORT as readonly string[]).includes(tipo) ? tipo : 'centralizada' })
+    }
+    return result
+  }
+
+  throw new Error('Formato no soportado. Usa .xlsx o .csv')
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -99,9 +268,9 @@ function TablaUsuarios({
         />
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200">
+      <div className="overflow-auto rounded-xl border border-gray-200 max-h-[calc(100vh-300px)]">
         <table className="w-full text-sm">
-          <thead>
+          <thead className="sticky top-0 z-10">
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
                 Usuario
@@ -271,9 +440,9 @@ function TablaUsuarios({
 
 function TablaClientes({ clientes }: { clientes: ClienteAdmin[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200">
+    <div className="overflow-auto rounded-xl border border-gray-200 max-h-[calc(100vh-300px)]">
       <table className="w-full text-sm">
-        <thead>
+        <thead className="sticky top-0 z-10">
           <tr className="bg-gray-50 border-b border-gray-200">
             <th className="px-4 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
               Código UPP
@@ -671,9 +840,225 @@ function ModalCrearCliente({
   )
 }
 
+// ── Modal: Importar Dependencias ───────────────────────────────────────────────
+
+function ModalImportarDependencias({
+  onClose,
+  onImportado,
+}: {
+  onClose: () => void
+  onImportado: () => void
+}) {
+  const qc = useQueryClient()
+  const [filas, setFilas] = useState<FilaImport[] | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [error, setError] = useState('')
+  const [parsing, setParsing] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [resultados, setResultados] = useState<{ ok: number; fail: number } | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleFile = async (file: File) => {
+    setParsing(true)
+    setError('')
+    setFilas(null)
+    setFileName(file.name)
+    try {
+      const rows = await parsearArchivoImport(file)
+      if (rows.length === 0) setError('El archivo no contiene filas de datos.')
+      else setFilas(rows)
+    } catch (e) {
+      setError((e as Error).message ?? 'Error al leer el archivo.')
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const handleImport = async () => {
+    if (!filas) return
+    setImporting(true)
+    let ok = 0
+    let fail = 0
+    for (const fila of filas) {
+      try {
+        await clientesAdminApi.create({ codigo_upp: fila.codigo_upp, nombre: fila.nombre, tipo: fila.tipo || 'centralizada', activo: true })
+        ok++
+      } catch {
+        fail++
+      }
+    }
+    await qc.invalidateQueries({ queryKey: ['admin-clientes'] })
+    setResultados({ ok, fail })
+    setImporting(false)
+    if (fail === 0) setTimeout(() => onImportado(), 1400)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <h2 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+            <Upload size={16} style={{ color: GUINDA }} />
+            Importar dependencias desde Excel
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 transition-colors">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          {/* Instrucciones */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 space-y-1">
+            <p className="font-semibold">Formato esperado (.xlsx o .csv):</p>
+            <p>
+              Columna A: <strong>Código UPP</strong> &nbsp;|&nbsp;
+              Columna B: <strong>Nombre</strong> &nbsp;|&nbsp;
+              Columna C: <strong>Tipo</strong> (centralizada, paraestatal, autonoma, poder) — opcional
+            </p>
+            <p className="text-[10px] text-blue-500">
+              Los encabezados en la primera fila se detectan automáticamente y se omiten.
+            </p>
+          </div>
+
+          {/* Selector de archivo */}
+          {!resultados && (
+            <div>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+              />
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={parsing}
+                className="w-full border-2 border-dashed border-gray-300 rounded-xl py-8 flex flex-col items-center gap-2 text-gray-500 hover:border-gray-400 hover:bg-gray-50 transition-all disabled:opacity-60"
+              >
+                {parsing ? (
+                  <><Loader2 size={20} className="animate-spin" /><span className="text-sm">Procesando archivo…</span></>
+                ) : (
+                  <>
+                    <Upload size={22} />
+                    <span className="text-sm font-medium">{fileName || 'Seleccionar archivo Excel o CSV'}</span>
+                    <span className="text-xs text-gray-400">.xlsx · .xls · .csv</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
+              <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+              {error}
+            </div>
+          )}
+
+          {/* Vista previa */}
+          {filas && !resultados && (
+            <div>
+              <p className="text-xs font-semibold text-gray-700 mb-2">
+                Vista previa — {filas.length} dependencia{filas.length !== 1 ? 's' : ''} encontrada{filas.length !== 1 ? 's' : ''}
+              </p>
+              <div className="rounded-xl border border-gray-200 overflow-hidden max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wide text-[10px]">Código UPP</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wide text-[10px]">Nombre</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wide text-[10px]">Tipo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filas.map((f, i) => (
+                      <tr key={i} className={!f.codigo_upp || !f.nombre ? 'bg-yellow-50' : 'hover:bg-gray-50/50'}>
+                        <td className="px-3 py-2 font-mono font-bold text-gray-800">
+                          {f.codigo_upp || <span className="text-red-400 font-normal">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">
+                          {f.nombre || <span className="text-red-400">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-500">
+                          {TIPO_CLIENTE_LABELS[f.tipo] ?? f.tipo}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Resultado */}
+          {resultados && (
+            <div className="text-center py-8 space-y-4">
+              <CheckCircle2 size={44} className="mx-auto text-green-500" />
+              <p className="text-sm font-bold text-gray-900">Importación completada</p>
+              <div className="flex justify-center gap-4">
+                <div className="bg-green-50 border border-green-200 rounded-xl px-6 py-3 text-center">
+                  <p className="text-3xl font-bold text-green-700">{resultados.ok}</p>
+                  <p className="text-[10px] text-green-600 font-medium mt-0.5">Registradas</p>
+                </div>
+                {resultados.fail > 0 && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl px-6 py-3 text-center">
+                    <p className="text-3xl font-bold text-red-700">{resultados.fail}</p>
+                    <p className="text-[10px] text-red-600 font-medium mt-0.5">Con error</p>
+                  </div>
+                )}
+              </div>
+              {resultados.fail > 0 && (
+                <p className="text-xs text-gray-500 max-w-xs mx-auto">
+                  Algunas dependencias no pudieron registrarse (puede que ya existan o tengan datos inválidos).
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {!resultados ? (
+          <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleImport}
+              disabled={!filas || filas.length === 0 || importing}
+              className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold text-white transition-colors disabled:opacity-50"
+              style={{ backgroundColor: GUINDA }}
+            >
+              {importing ? (
+                <><Loader2 size={13} className="animate-spin" />Importando…</>
+              ) : (
+                <><Upload size={13} />Importar {filas ? filas.length : ''} dependencia{filas && filas.length !== 1 ? 's' : ''}</>
+              )}
+            </button>
+          </div>
+        ) : (
+          <div className="flex justify-end px-6 py-4 border-t border-gray-100 flex-shrink-0">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Componente principal ───────────────────────────────────────────────────────
 
-type Tab = 'usuarios' | 'clientes'
+type Tab = 'usuarios' | 'clientes' | 'permisos'
 
 export default function Admin() {
   const { user } = useAuth()
@@ -683,6 +1068,7 @@ export default function Admin() {
   const [tab, setTab] = useState<Tab>('usuarios')
   const [showModalUsuario, setShowModalUsuario] = useState(false)
   const [showModalCliente, setShowModalCliente] = useState(false)
+  const [showModalImportar, setShowModalImportar] = useState(false)
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -777,8 +1163,9 @@ export default function Admin() {
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-5 bg-gray-100 p-1 rounded-xl w-fit">
         {([
-          { key: 'usuarios', label: 'Usuarios', icon: Users },
-          { key: 'clientes', label: 'Dependencias', icon: Building2 },
+          { key: 'usuarios',  label: 'Usuarios',          icon: Users     },
+          { key: 'clientes',  label: 'Dependencias',      icon: Building2 },
+          { key: 'permisos',  label: 'Roles y Permisos',  icon: Lock      },
         ] as const).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -803,12 +1190,26 @@ export default function Admin() {
                 {clientes.length}
               </span>
             )}
+            {key === 'permisos' && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    style={{ backgroundColor: tab === key ? '#FDF2F4' : '#e5e7eb', color: tab === key ? GUINDA : '#9ca3af' }}>
+                9
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {/* Acción principal */}
       <div className="flex justify-end mb-4">
+        {tab === 'permisos' && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200">
+            <Lock size={12} className="text-blue-500" />
+            <span className="text-[11px] text-blue-600 font-medium">
+              Haz clic en cualquier celda para activar o desactivar un permiso
+            </span>
+          </div>
+        )}
         {tab === 'usuarios' && (
           <button
             onClick={() => setShowModalUsuario(true)}
@@ -820,14 +1221,24 @@ export default function Admin() {
           </button>
         )}
         {tab === 'clientes' && isSuperadmin && (
-          <button
-            onClick={() => setShowModalCliente(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-colors"
-            style={{ backgroundColor: GUINDA }}
-          >
-            <Plus size={14} />
-            Nueva dependencia
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowModalImportar(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors border"
+              style={{ borderColor: GUINDA, color: GUINDA, backgroundColor: '#FDF2F4' }}
+            >
+              <Upload size={14} />
+              Importar Excel
+            </button>
+            <button
+              onClick={() => setShowModalCliente(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-colors"
+              style={{ backgroundColor: GUINDA }}
+            >
+              <Plus size={14} />
+              Nueva dependencia
+            </button>
+          </div>
         )}
       </div>
 
@@ -859,6 +1270,8 @@ export default function Admin() {
         )
       )}
 
+      {tab === 'permisos' && <TablaPermisos />}
+
       {/* Modales */}
       {showModalUsuario && (
         <ModalCrearUsuario
@@ -873,6 +1286,12 @@ export default function Admin() {
         <ModalCrearCliente
           onClose={() => setShowModalCliente(false)}
           onCreado={() => setShowModalCliente(false)}
+        />
+      )}
+      {showModalImportar && (
+        <ModalImportarDependencias
+          onClose={() => setShowModalImportar(false)}
+          onImportado={() => setShowModalImportar(false)}
         />
       )}
 

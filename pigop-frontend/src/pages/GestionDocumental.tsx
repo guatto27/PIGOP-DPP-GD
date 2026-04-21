@@ -1,4 +1,6 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { makePermissionChecker } from '../utils/rolePermissions'
+import { usePermissionsVersion } from '../hooks/usePermissionsVersion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen, Plus, Search, FileText, Trash2, Upload,
@@ -7,7 +9,7 @@ import {
   ArrowRight, InboxIcon, SendIcon, Building2,
   Download, Shield, BookOpen, FileSignature,
   History, CornerUpLeft, RefreshCw, Lock, Hash, Mail, ChevronLeft, ChevronRight,
-  ClipboardCheck, ArrowLeftRight,
+  ClipboardCheck, ArrowLeftRight, FileSearch,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -26,8 +28,7 @@ import {
   type CertificadoInfo,
 } from '../api/documentos'
 import { catalogoApi, type FuncionarioItem } from '../api/documentos'
-import { clientesApi } from '../api/depps'
-import { uppsApi, type UPP } from '../api/upps'
+import { clientesApi, type Cliente } from '../api/depps'
 import { useAuth } from '../hooks/useAuth'
 import { Button } from '../components/ui/Button'
 import { PageSpinner } from '../components/ui/Spinner'
@@ -220,22 +221,31 @@ function PipelineRecibido({ estado }: { estado: string }) {
   const cfg = ESTADO_RECIBIDO_CONFIG[estado as keyof typeof ESTADO_RECIBIDO_CONFIG]
   const step = cfg?.step ?? 0
   return (
-    <div className="flex items-center gap-0.5">
+    <div className="flex items-start w-full">
       {PASOS_RECIBIDO.map((label, i) => {
         const n = i + 1
         const done   = n < step
         const active = n === step
         return (
-          <div key={label} className="flex items-center gap-0.5">
-            <div className={clsx(
-              'w-2 h-2 rounded-full',
-              done   ? 'bg-green-500' :
-              active ? 'bg-blue-500 ring-2 ring-blue-200' :
-                       'bg-gray-200',
-            )} title={label} />
-            {i < PASOS_RECIBIDO.length - 1 && (
-              <div className={clsx('w-4 h-px', done ? 'bg-green-300' : 'bg-gray-200')} />
-            )}
+          <div key={label} className="flex-1 flex flex-col items-center min-w-0">
+            {/* Línea + punto */}
+            <div className="w-full flex items-center">
+              <div className={clsx('flex-1 h-px', i === 0 ? 'opacity-0' : n <= step ? 'bg-green-400' : 'bg-gray-200')} />
+              <div className={clsx(
+                'w-2.5 h-2.5 rounded-full flex-shrink-0 transition-all',
+                done   ? 'bg-green-500' :
+                active ? 'bg-blue-500 ring-2 ring-blue-200' :
+                         'bg-gray-200',
+              )} />
+              <div className={clsx('flex-1 h-px', i === PASOS_RECIBIDO.length - 1 ? 'opacity-0' : done ? 'bg-green-400' : 'bg-gray-200')} />
+            </div>
+            {/* Etiqueta */}
+            <span className={clsx(
+              'text-[9px] mt-1 text-center leading-tight font-medium px-0.5',
+              active ? 'text-blue-700' : done ? 'text-green-600' : 'text-gray-400',
+            )}>
+              {label}
+            </span>
           </div>
         )
       })}
@@ -252,6 +262,11 @@ function ModalRegistrarRecibido({
     queryKey: ['clientes'], queryFn: clientesApi.list,
     enabled: user?.rol === 'superadmin',
   })
+  // Catálogo de dependencias para el autocompletado de remitente_dependencia
+  const { data: catalogoDepend = [] } = useQuery({
+    queryKey: ['clientes-catalogo'], queryFn: clientesApi.list,
+    staleTime: 5 * 60_000,
+  })
   const qc = useQueryClient()
   const mutation = useMutation({
     mutationFn: documentosApi.crearRecibido,
@@ -262,11 +277,17 @@ function ModalRegistrarRecibido({
   // Wizard state
   const [step, setStep] = useState<'upload' | 'crop' | 'processing' | 'review' | 'manual'>('upload')
   const [ocrResult, setOcrResult] = useState<PreviewOCRResult | null>(null)
+  const [ocrFalló, setOcrFalló] = useState(false)
   const [fileName, setFileName] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const [cropImage, setCropImage] = useState<HTMLImageElement | null>(null)
   const [cropFile, setCropFile] = useState<File | null>(null)
+  // Blob URL para vista previa local del documento (no depende del URL de storage)
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
+  useEffect(() => {
+    return () => { if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl) }
+  }, [previewBlobUrl])
 
   const [form, setForm] = useState<DocumentoRecibidoCreate>({
     cliente_id: clienteId,
@@ -309,37 +330,89 @@ function ModalRegistrarRecibido({
     try {
       const result = await documentosApi.previewOCR(file)
       setOcrResult(result)
-      // Pre-fill form with OCR data
-      const d = result.datos_extraidos
+
+      // ── Extracción robusta: prueba múltiples nombres de campo que la IA puede devolver ──
+      let raw: Record<string, unknown> = result.datos_extraidos ?? {}
+
+      // Si el backend no pudo parsear el JSON (devuelve raw_response), intentar re-parsear aquí
+      if (raw['raw_response'] && typeof raw['raw_response'] === 'string') {
+        try {
+          const txt = (raw['raw_response'] as string).trim()
+          const start = txt.indexOf('{')
+          const end   = txt.lastIndexOf('}')
+          if (start !== -1 && end > start) {
+            const parsed = JSON.parse(txt.slice(start, end + 1))
+            if (parsed && typeof parsed === 'object') raw = parsed as Record<string, unknown>
+          }
+        } catch { /* mantener raw original */ }
+      }
+
+      const d: Record<string, unknown> = raw
+      const str = (...keys: string[]): string => {
+        for (const k of keys) {
+          const v = d[k]
+          if (v && typeof v === 'string' && v.trim()) return v.trim()
+          if (v && typeof v === 'object' && v !== null && 'value' in (v as object)) {
+            const inner = (v as { value: unknown }).value
+            if (inner && typeof inner === 'string' && inner.trim()) return inner.trim()
+          }
+          // Manejar arrays: tomar primer elemento si es string
+          if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' && v[0].trim()) {
+            return v[0].trim()
+          }
+        }
+        return ''
+      }
+
+      const asunto        = str('asunto', 'subject', 'tema', 'asunto_principal', 'titulo')
+      const numeroOficio  = str('numero_memorandum', 'numero_oficio', 'num_oficio', 'numero', 'folio', 'oficio', 'no_oficio', 'n_oficio')
+      const remitenteNom  = str('remitente_nombre', 'firmante', 'remitente', 'nombre_firmante', 'nombre_remitente', 'suscribe')
+      const remitenteCar  = str('remitente_cargo', 'cargo', 'puesto', 'cargo_firmante')
+      const remitenteDep  = str('remitente_dependencia', 'dependencia', 'institucion', 'organizacion', 'entidad', 'origen')
+      const fechaDoc      = str('fecha_documento', 'fecha', 'fecha_oficio', 'fecha_emision', 'date')
+      const descripcion   = str('cuerpo_resumen', 'cuerpo', 'resumen', 'descripcion', 'contenido', 'body')
+
+      const esMemorandum =
+        (d.tipo_documento as string)?.toLowerCase() === 'memorandum' ||
+        (d.tipo_documento as string)?.toLowerCase() === 'memorándum' ||
+        (result.clasificacion.tipo_documento as string)?.toLowerCase() === 'memorandum' ||
+        !!str('numero_memorandum')
+
       setForm(prev => ({
         ...prev,
-        asunto: (d.asunto as string) || prev.asunto,
-        numero_oficio_origen: (d.numero_oficio as string) || prev.numero_oficio_origen,
-        remitente_nombre: (d.remitente_nombre as string) || prev.remitente_nombre,
-        remitente_cargo: (d.remitente_cargo as string) || prev.remitente_cargo,
-        remitente_dependencia: (d.remitente_dependencia as string) || prev.remitente_dependencia,
-        fecha_documento: (d.fecha_documento as string) || prev.fecha_documento,
-        descripcion: (d.cuerpo_resumen as string) || prev.descripcion,
+        tipo: esMemorandum ? 'memorandum' : prev.tipo,
+        asunto:               asunto       || prev.asunto,
+        numero_oficio_origen: numeroOficio || prev.numero_oficio_origen,
+        remitente_nombre:     remitenteNom || prev.remitente_nombre,
+        remitente_cargo:      remitenteCar || prev.remitente_cargo,
+        remitente_dependencia: remitenteDep || prev.remitente_dependencia,
+        fecha_documento:      fechaDoc     || prev.fecha_documento,
+        descripcion:          descripcion  || prev.descripcion,
         // File info
         nombre_archivo: result.archivo.nombre_archivo,
-        url_storage: result.archivo.url_storage,
-        mime_type: result.archivo.mime_type,
+        url_storage:    result.archivo.url_storage,
+        mime_type:      result.archivo.mime_type,
         // OCR data
         datos_extraidos_ia: result.datos_extraidos,
         ocr_procesado: true,
         // Classification
         sugerencia_area_codigo: (result.clasificacion.area_codigo as string) || undefined,
         sugerencia_area_nombre: (result.clasificacion.area_nombre as string) || undefined,
-        sugerencia_fundamento: (result.clasificacion.fundamento as string) || undefined,
-        sugerencia_plazo_dias: (result.clasificacion.plazo_dias as number) || undefined,
-        confianza_clasificacion: (result.clasificacion.confianza as number) || undefined,
-        regla_turno_codigo: (result.clasificacion.regla_codigo as string) || undefined,
-        genera_tramite: (result.clasificacion.genera_tramite as string) || undefined,
-        fecha_limite: result.fecha_limite || undefined,
-        // Auto-prioridad urgente si la IA detecta plazos o remitente crítico
+        sugerencia_fundamento:  (result.clasificacion.fundamento  as string) || undefined,
+        sugerencia_plazo_dias:  (result.clasificacion.plazo_dias  as number) || undefined,
+        confianza_clasificacion:(result.clasificacion.confianza   as number) || undefined,
+        regla_turno_codigo:     (result.clasificacion.regla_codigo as string) || undefined,
+        genera_tramite:         (result.clasificacion.genera_tramite as string) || undefined,
+        fecha_limite:           result.fecha_limite || undefined,
         prioridad: (result.prioridad_sugerida as 'normal' | 'urgente' | 'muy_urgente') || prev.prioridad,
       }))
+      // Detectar si la IA no devolvió ningún campo útil
+      const camposExtraídos = [asunto, numeroOficio, remitenteNom, remitenteCar, remitenteDep, fechaDoc].filter(Boolean)
+      setOcrFalló(camposExtraídos.length === 0)
+
       setStep('review')
+      // Crear blob URL local para vista previa (no depende del URL de storage)
+      setPreviewBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file) })
     } catch (e: unknown) {
       const resp = (e as { response?: { data?: { detail?: string }; status?: number } })?.response
       const msg = resp?.data?.detail
@@ -369,11 +442,23 @@ function ModalRegistrarRecibido({
   const clasificacion = ocrResult?.clasificacion
   const confianza = clasificacion?.confianza as number | undefined
 
+  const hasPdfPreview = step === 'review' && !!previewBlobUrl
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
+      {/* Catálogo de dependencias para autocompletado */}
+      <datalist id="depend-catalog">
+        {catalogoDepend.filter(c => c.activo).map(c => (
+          <option key={c.id} value={c.nombre} />
+        ))}
+      </datalist>
+
+      <div className={clsx(
+        'bg-white rounded-2xl shadow-2xl w-full flex flex-col',
+        hasPdfPreview ? 'max-w-[92vw] w-[92vw] h-[92vh]' : 'max-w-lg max-h-[92vh] overflow-y-auto',
+      )}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FDF2F4' }}>
               <InboxIcon size={14} style={{ color: GUINDA }} />
@@ -381,14 +466,21 @@ function ModalRegistrarRecibido({
             <h2 className="font-semibold text-gray-900 text-sm">
               {step === 'upload' ? 'Registrar oficio recibido' :
                step === 'processing' ? 'Procesando documento...' :
-               step === 'review' ? 'Revisar datos extraidos' :
+               step === 'review' ? 'Revisar datos extraídos' :
                'Captura manual'}
             </h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
-        <div className="px-6 py-5">
+        {/* Cuerpo: formulario (izquierda) + PDF previa (derecha cuando aplique) */}
+        <div className="flex flex-1 overflow-hidden rounded-b-2xl">
+          {/* Formulario — siempre visible; se angosta cuando hay PDF */}
+          <div className={clsx(
+            'overflow-y-auto px-6 py-5 flex-shrink-0',
+            hasPdfPreview ? 'w-[42%] border-r border-gray-100 rounded-bl-2xl' : 'w-full rounded-b-2xl',
+          )}>
+
           {err && (
             <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg px-3 py-2 mb-4 flex items-start gap-2">
               <AlertTriangle size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
@@ -635,6 +727,19 @@ function ModalRegistrarRecibido({
                 </div>
               )}
 
+              {/* Aviso cuando la IA no pudo extraer campos */}
+              {ocrFalló && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                  <p className="text-xs font-semibold text-orange-700 flex items-center gap-1.5">
+                    ⚠️ La IA no pudo leer los datos del documento
+                  </p>
+                  <p className="text-[10px] text-orange-600 mt-0.5">
+                    El servicio de inteligencia artificial procesó el archivo pero no extrajo los campos (puede ser un error temporal o un problema con el API de Gemini).
+                    Por favor capture los datos manualmente en los campos de abajo.
+                  </p>
+                </div>
+              )}
+
               {/* Alerta de prioridad urgente auto-detectada */}
               {ocrResult?.prioridad_sugerida === 'urgente' && (
                 <div className="bg-red-50 border border-red-200 rounded-xl p-3">
@@ -654,6 +759,55 @@ function ModalRegistrarRecibido({
                 <span className="text-xs text-gray-600 truncate flex-1">{fileName}</span>
                 <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
               </div>
+
+              {/* Banner: Memorándum detectado */}
+              {form.tipo === 'memorandum' && (
+                <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">📝</span>
+                    <p className="text-xs font-semibold text-amber-800">Memorándum detectado por IA</p>
+                    <span className="ml-auto text-[10px] text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">Editable</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-medium text-amber-700 mb-1">Nº Memorándum <span className="text-green-600">(IA)</span></label>
+                      <input
+                        className="w-full border border-amber-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        placeholder="Ej: MEM/DPP/001/2026"
+                        value={form.numero_oficio_origen ?? ''}
+                        onChange={e => set('numero_oficio_origen', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-amber-700 mb-1">Fecha <span className="text-green-600">(IA)</span></label>
+                      <input
+                        type="date"
+                        className="w-full border border-amber-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        value={form.fecha_documento ?? ''}
+                        onChange={e => set('fecha_documento', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-amber-700 mb-1">Remitente (nombre) <span className="text-green-600">(IA)</span></label>
+                      <input
+                        className="w-full border border-amber-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        placeholder="Nombre completo"
+                        value={form.remitente_nombre ?? ''}
+                        onChange={e => set('remitente_nombre', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-medium text-amber-700 mb-1">Remitente (cargo) <span className="text-green-600">(IA)</span></label>
+                      <input
+                        className="w-full border border-amber-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        placeholder="Cargo o puesto"
+                        value={form.remitente_cargo ?? ''}
+                        onChange={e => set('remitente_cargo', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Editable form - pre-filled from OCR */}
               <div className="grid grid-cols-2 gap-3">
@@ -715,9 +869,13 @@ function ModalRegistrarRecibido({
                   <label className="block text-xs font-medium text-gray-700 mb-1">
                     Dependencia <span className="text-green-600 text-[10px] font-normal">(IA)</span>
                   </label>
-                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    placeholder="SCOP, IMSS, etc."
-                    value={form.remitente_dependencia ?? ''} onChange={e => set('remitente_dependencia', e.target.value)} />
+                  <input
+                    list="depend-catalog"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Buscar o escribir dependencia…"
+                    value={form.remitente_dependencia ?? ''}
+                    onChange={e => set('remitente_dependencia', e.target.value)}
+                  />
                 </div>
               </div>
 
@@ -763,7 +921,7 @@ function ModalRegistrarRecibido({
 
               <div className="flex justify-between items-center gap-2 pt-2 border-t border-gray-100">
                 <button type="button"
-                  onClick={() => { setStep('upload'); setOcrResult(null); setFileName('') }}
+                  onClick={() => { setStep('upload'); setOcrResult(null); setFileName(''); setPreviewBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null }) }}
                   className="flex items-center gap-1 px-3 py-2 text-xs text-gray-500 hover:text-gray-700 transition-colors">
                   <ArrowRight size={12} className="rotate-180" /> Cambiar archivo
                 </button>
@@ -832,9 +990,13 @@ function ModalRegistrarRecibido({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">Dependencia</label>
-                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    placeholder="SCOP, IMSS, etc."
-                    value={form.remitente_dependencia ?? ''} onChange={e => set('remitente_dependencia', e.target.value)} />
+                  <input
+                    list="depend-catalog"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Buscar o escribir dependencia…"
+                    value={form.remitente_dependencia ?? ''}
+                    onChange={e => set('remitente_dependencia', e.target.value)}
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -886,6 +1048,24 @@ function ModalRegistrarRecibido({
               </div>
             </form>
           )}
+          </div>
+          {/* Derecha: vista previa del documento (solo en step review) */}
+          {hasPdfPreview && (
+            <div className="flex-1 flex flex-col bg-gray-50 rounded-br-2xl overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-gray-200 bg-white flex items-center gap-2 flex-shrink-0">
+                <FileText size={13} className="text-gray-400 flex-shrink-0" />
+                <span className="text-xs font-medium text-gray-600 truncate">{fileName}</span>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <iframe
+                  src={previewBlobUrl ?? undefined}
+                  title="Vista previa del documento"
+                  className="w-full h-full"
+                  style={{ border: 'none' }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -912,6 +1092,16 @@ function ModalNuevoEmitido({
   const [plantillas, setPlantillas] = useState<PlantillaOficio[]>([])
   const [plantillaSel, setPlantillaSel] = useState('')
   const [cargandoFolio, setCargandoFolio] = useState(false)
+  // OCR para documentos emitidos
+  const [extrayendoOCR, setExtrayendoOCR] = useState(false)
+  const [ocrOk, setOcrOk] = useState(false)
+  const [ocrFalló, setOcrFalló] = useState(false)
+  const [ocrErrorMsg, setOcrErrorMsg] = useState('')
+  // Validación de folio
+  const [folioDuplicado, setFolioDuplicado] = useState(false)
+  const [verificandoFolio, setVerificandoFolio] = useState(false)
+  const folioTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [form, setForm] = useState<DocumentoEmitidoCreate>({
     cliente_id: clienteId,
     tipo: 'oficio',
@@ -931,22 +1121,119 @@ function ModalNuevoEmitido({
   const fileRefModal = useRef<HTMLInputElement>(null)
   const [directoDirector, setDirectoDirector] = useState(false)
   const [yaFirmadoAutografa, setYaFirmadoAutografa] = useState(false)
-  const [extrayendoMeta] = useState(false)
   const set = (k: keyof DocumentoEmitidoCreate, v: unknown) => setForm(p => ({ ...p, [k]: v }))
 
-  // Auto-generar folio al seleccionar área
+  // ── OCR manual: se dispara al hacer clic en el botón "Analizar con IA" ──────
+  const ejecutarOCR = async () => {
+    if (!archivoSubir) return
+    setExtrayendoOCR(true); setOcrOk(false); setOcrFalló(false); setOcrErrorMsg('')
+    try {
+      const result = await documentosApi.previewOCR(archivoSubir)
+      let raw: Record<string, unknown> = result.datos_extraidos ?? {}
+
+      // Si el backend devolvió error de Gemini, reportarlo
+      if (raw['error'] && typeof raw['error'] === 'string') {
+        setOcrFalló(true)
+        setOcrErrorMsg(`Error del servicio IA: ${raw['error']}`)
+        return
+      }
+
+      // Re-parsear si el backend devolvió raw_response
+      if (raw['raw_response'] && typeof raw['raw_response'] === 'string') {
+        try {
+          const txt = (raw['raw_response'] as string).trim()
+          const s = txt.indexOf('{'); const e2 = txt.lastIndexOf('}')
+          if (s !== -1 && e2 > s) {
+            const p = JSON.parse(txt.slice(s, e2 + 1))
+            if (p && typeof p === 'object') raw = p as Record<string, unknown>
+          }
+        } catch { /* mantener raw */ }
+      }
+
+      const str = (...keys: string[]): string => {
+        for (const k of keys) {
+          const v = raw[k]
+          if (v && typeof v === 'string' && v.trim()) return v.trim()
+          if (v && typeof v === 'object' && v !== null && 'value' in (v as object)) {
+            const inner = (v as { value: unknown }).value
+            if (inner && typeof inner === 'string' && inner.trim()) return inner.trim()
+          }
+        }
+        return ''
+      }
+
+      const asunto      = str('asunto', 'subject', 'tema', 'titulo')
+      const fecha       = str('fecha_documento', 'fecha', 'fecha_oficio', 'date')
+      const destNombre  = str('destinatario_nombre', 'destinatario', 'para', 'dirigido_a')
+      const destCargo   = str('destinatario_cargo', 'cargo_destinatario')
+      const destDep     = str('destinatario_dependencia', 'dependencia_destino', 'remitente_dependencia', 'dependencia', 'institucion')
+      const descripcion = str('cuerpo_resumen', 'resumen', 'cuerpo', 'descripcion', 'contenido')
+      const firmantesAd = raw['firmantes_adicionales']
+      let elaboro = ''; let reviso = ''
+      if (Array.isArray(firmantesAd)) {
+        for (const f of firmantesAd as Array<Record<string, string>>) {
+          if (f.rol === 'elaboró' || f.rol === 'elaboro') elaboro = f.nombre || ''
+          if (f.rol === 'revisó' || f.rol === 'reviso') reviso = f.nombre || ''
+        }
+      }
+      const camposExtraídos = [asunto, fecha, destNombre, destCargo, destDep].filter(Boolean)
+      setForm(prev => ({
+        ...prev,
+        asunto:              asunto     || prev.asunto,
+        fecha_documento:     fecha      || prev.fecha_documento,
+        destinatario_nombre: destNombre || prev.destinatario_nombre,
+        destinatario_cargo:  destCargo  || prev.destinatario_cargo,
+        dependencia_destino: destDep    || prev.dependencia_destino,
+        referencia_elaboro:  elaboro    || prev.referencia_elaboro,
+        referencia_reviso:   reviso     || prev.referencia_reviso,
+        ...(descripcion ? { descripcion } : {}),
+      }))
+      setOcrOk(camposExtraídos.length > 0)
+      if (camposExtraídos.length === 0) {
+        setOcrFalló(true)
+        setOcrErrorMsg('La IA procesó el documento pero no encontró campos reconocibles. Verifique que el PDF tenga texto legible.')
+      }
+    } catch (e: unknown) {
+      const resp = (e as { response?: { data?: { detail?: string }; status?: number } })?.response
+      const msg  = resp?.data?.detail ?? (e instanceof Error ? e.message : 'Error de conexión con el servidor')
+      const status = resp?.status
+      setOcrFalló(true)
+      setOcrErrorMsg(`Error ${status ? `HTTP ${status}: ` : ''}${msg}`)
+    } finally {
+      setExtrayendoOCR(false)
+    }
+  }
+
+  // ── Verificación de folio (debounced 600ms) ────────────────────────────────
+  const verificarFolioDebounced = (folio: string) => {
+    setFolioDuplicado(false)
+    if (folioTimerRef.current) clearTimeout(folioTimerRef.current)
+    if (!folio.trim()) return
+    folioTimerRef.current = setTimeout(async () => {
+      setVerificandoFolio(true)
+      try {
+        const r = await documentosApi.verificarFolio(folio.trim())
+        setFolioDuplicado(!r.disponible)
+      } catch { /* ignorar */ }
+      setVerificandoFolio(false)
+    }, 600)
+  }
+
+  // ── Auto-generar folio al seleccionar área ─────────────────────────────────
   const handleAreaChange = async (codigo: string) => {
     setAreaOrigen(codigo)
     setFolioEditado(false)
+    setFolioDuplicado(false)
     if (!codigo) { setFolioGenerado(''); setPlantillas([]); setPlantillaSel(''); return }
     setCargandoFolio(true)
     try {
       const r = await documentosApi.siguienteFolio('OFICIO', codigo)
       setFolioGenerado(r.folio)
       set('numero_control', r.folio)
+      // El folio auto-generado es por definición el siguiente disponible → no hay duplicado
+      setFolioDuplicado(false)
     } catch { /* keep empty */ }
     setCargandoFolio(false)
-    // Cargar plantillas para el área
     try {
       const p = await documentosApi.plantillas(codigo)
       setPlantillas(p)
@@ -968,6 +1255,7 @@ function ModalNuevoEmitido({
     e.preventDefault(); setErr('')
     if (!form.asunto.trim()) { setErr('El asunto es obligatorio.'); return }
     if (!areaOrigen) { setErr('Seleccione el área de origen.'); return }
+    if (folioDuplicado) { setErr('El número de oficio ya está registrado. Use el folio recomendado o elija uno diferente.'); return }
     const areaInfo = areasDisponibles?.find(a => a.codigo === areaOrigen)
     const folioFinal = folioEditado ? (form.numero_control ?? '') : folioGenerado
     // Si ya tiene firma autógrafa, se registra como firmado directamente
@@ -1058,25 +1346,38 @@ function ModalNuevoEmitido({
               <div className="space-y-2">
                 <input ref={fileRefModal} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp,.doc,.docx"
                   className="hidden"
-                  onChange={e => { const f = e.target.files?.[0]; if (f) setArchivoSubir(f) }} />
+                  onChange={e => { const f = e.target.files?.[0]; if (f) { setArchivoSubir(f); setOcrOk(false); setOcrFalló(false) } }} />
                 {archivoSubir ? (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
-                      <FileText size={18} className="text-blue-600 flex-shrink-0" />
+                    {/* Fila del archivo */}
+                    <div className={`flex items-center gap-3 p-3 rounded-xl border ${ocrOk ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+                      <FileText size={18} className={`flex-shrink-0 ${ocrOk ? 'text-green-600' : 'text-blue-600'}`} />
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-medium text-blue-800 truncate">{archivoSubir.name}</p>
-                        <p className="text-[10px] text-blue-600">{(archivoSubir.size / 1024 / 1024).toFixed(2)} MB</p>
+                        <p className={`text-xs font-medium truncate ${ocrOk ? 'text-green-800' : 'text-blue-800'}`}>{archivoSubir.name}</p>
+                        <p className={`text-[10px] ${ocrOk ? 'text-green-600' : 'text-blue-500'}`}>
+                          {ocrOk ? '✓ Datos extraídos — revise los campos abajo' : `${(archivoSubir.size / 1024 / 1024).toFixed(2)} MB`}
+                        </p>
                       </div>
-                      <button type="button" onClick={() => setArchivoSubir(null)} className="text-blue-400 hover:text-blue-600">
-                        <X size={14} />
-                      </button>
+                      {ocrOk
+                        ? <CheckCircle2 size={14} className="text-green-500 flex-shrink-0" />
+                        : <button type="button" onClick={() => { setArchivoSubir(null); setOcrOk(false); setOcrFalló(false); setOcrErrorMsg('') }} className="text-gray-400 hover:text-gray-600"><X size={14} /></button>
+                      }
                     </div>
-                    {!extrayendoMeta && !form.asunto && (
-                      <p className="text-[9px] text-blue-500 italic px-1">Al registrar, se extraerán los metadatos automáticamente con IA</p>
+                    {/* Botón analizar / estado OCR */}
+                    {!ocrOk && (
+                      <button type="button" onClick={ejecutarOCR} disabled={extrayendoOCR}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border-2 border-dashed border-purple-300 text-xs font-medium text-purple-700 hover:bg-purple-50 hover:border-purple-400 transition-all disabled:opacity-60">
+                        {extrayendoOCR
+                          ? <><RotateCcw size={13} className="animate-spin" /> Analizando con IA…</>
+                          : <><Wand2 size={13} /> ✨ Analizar con IA y llenar campos automáticamente</>}
+                      </button>
                     )}
-                    {extrayendoMeta && (
-                      <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-blue-600">
-                        <RotateCcw size={10} className="animate-spin" /> Extrayendo metadatos del documento...
+                    {/* Error detallado */}
+                    {ocrFalló && ocrErrorMsg && (
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                        <p className="text-[10px] text-orange-700 font-semibold mb-0.5">⚠️ No se pudieron extraer los datos:</p>
+                        <p className="text-[10px] text-orange-600">{ocrErrorMsg}</p>
+                        <p className="text-[10px] text-gray-500 mt-1">Puede capturar los datos manualmente en los campos de abajo.</p>
                       </div>
                     )}
                   </div>
@@ -1085,7 +1386,8 @@ function ModalNuevoEmitido({
                     className="border-2 border-dashed border-blue-200 rounded-xl py-5 px-4 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-all">
                     <Upload size={22} className="mx-auto mb-2 text-blue-500" />
                     <p className="text-xs font-medium text-gray-700 mb-0.5">Seleccionar archivo</p>
-                    <p className="text-[10px] text-gray-400">PDF, Word, JPG, PNG — Max. 20 MB</p>
+                    <p className="text-[10px] text-gray-400">PDF, Word (.docx), JPG, PNG — Max. 20 MB</p>
+                    <p className="text-[9px] text-blue-500 mt-1">✨ La IA leerá el documento y llenará los campos automáticamente</p>
                   </div>
                 )}
               </div>
@@ -1140,23 +1442,39 @@ function ModalNuevoEmitido({
               </div>
               {areaOrigen && (
                 <div>
-                  <label className="block text-[10px] text-gray-600 mb-1">
-                    No. de oficio {cargandoFolio && <span className="text-amber-600">(generando...)</span>}
+                  <label className="block text-[10px] text-gray-600 mb-1 flex items-center gap-1">
+                    No. de oficio (minutario)
+                    {cargandoFolio && <span className="text-amber-600 ml-1">(generando...)</span>}
+                    {verificandoFolio && <span className="text-blue-500 ml-1">(verificando...)</span>}
                   </label>
                   <div className="flex gap-2 items-center">
-                    <input className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"
-                      placeholder="SFA/SF/DPP/SPFP/0001/2026"
+                    <input
+                      className={`flex-1 border rounded-lg px-3 py-2 text-sm font-mono ${folioDuplicado ? 'border-red-400 bg-red-50' : 'border-gray-300'}`}
+                      placeholder="SFA/SF/DPP-SCEG/0001/2026"
                       value={folioEditado ? (form.numero_control ?? '') : folioGenerado}
-                      onChange={e => { setFolioEditado(true); set('numero_control', e.target.value) }} />
+                      onChange={e => {
+                        setFolioEditado(true)
+                        set('numero_control', e.target.value)
+                        verificarFolioDebounced(e.target.value)
+                      }} />
                     {folioEditado && (
-                      <button type="button" onClick={() => { setFolioEditado(false); set('numero_control', folioGenerado) }}
-                        className="text-[10px] text-amber-600 hover:text-amber-800 whitespace-nowrap">
-                        <RefreshCw size={12} />
+                      <button type="button"
+                        onClick={() => { setFolioEditado(false); set('numero_control', folioGenerado); setFolioDuplicado(false) }}
+                        title="Restaurar folio recomendado"
+                        className="text-amber-600 hover:text-amber-800">
+                        <RefreshCw size={13} />
                       </button>
                     )}
                   </div>
-                  {!folioEditado && folioGenerado && (
-                    <p className="text-[10px] text-gray-400 mt-1">Folio auto-generado. Puede editarlo manualmente.</p>
+                  {folioDuplicado && (
+                    <p className="text-[10px] text-red-600 mt-1 flex items-center gap-1">
+                      ⚠️ Este número de oficio ya está registrado. Use el siguiente disponible o presione <RefreshCw size={10} className="inline" /> para auto-generar.
+                    </p>
+                  )}
+                  {!folioEditado && folioGenerado && !folioDuplicado && (
+                    <p className="text-[10px] text-green-600 mt-1">
+                      ✓ Siguiente folio disponible. Puede editarlo si necesita un número diferente.
+                    </p>
                   )}
                 </div>
               )}
@@ -1256,12 +1574,15 @@ function ModalNuevoEmitido({
 
 // ── Panel detalle — Recibido ───────────────────────────────────────────────────
 function PanelRecibido({
-  doc, areas, onClose, onRefetch, onDelete,
-}: { doc: Documento; areas: AreaDPP[]; onClose: () => void; onRefetch: () => void; onDelete?: () => void }) {
+  doc, areas, onClose, onRefetch, onDelete, initialTab = 'info', hideDocumentVisor = false, onTabChange,
+}: { doc: Documento; areas: AreaDPP[]; onClose: () => void; onRefetch: () => void; onDelete?: () => void; initialTab?: 'info' | 'ocr' | 'documento' | 'historial'; hideDocumentVisor?: boolean; onTabChange?: (tab: string) => void }) {
   const { user } = useAuth()
+  const permissionsVersion = usePermissionsVersion()
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
-  const [tab, setTab] = useState<'info' | 'ocr' | 'documento' | 'historial'>('info')
+  const [tab, setTab] = useState<'info' | 'ocr' | 'documento' | 'historial'>(initialTab)
+  useEffect(() => { setTab(initialTab); onTabChange?.(initialTab) }, [initialTab])
+  const changeTab = (t: 'info' | 'ocr' | 'documento' | 'historial') => { setTab(t); onTabChange?.(t) }
   const [editBorrador, setEditBorrador] = useState(false)
   const [borradorText, setBorradorText] = useState(doc.borrador_respuesta ?? '')
   const [procesando, setProcesando] = useState(false)
@@ -1313,14 +1634,17 @@ function PanelRecibido({
   const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
   const isSubdirector = user?.rol === 'subdirector'
   const isJefeDepto = user?.rol === 'jefe_depto'
-  const canTurnar = isDirector || isSecretaria || isSuperadmin
-  const canReasignar = canTurnar || isSubdirector || isJefeDepto  // Áreas pueden redirigir
-  const canGenerarRespuesta = isArea || isAsesor || isDirector || isSuperadmin
-  const canFirmar = isDirector || isSuperadmin
-  const canEnviarParaFirma = isArea || isAsesor || isSecretaria || isSuperadmin
-  const canDescargarDocx = isDirector || isSuperadmin
-  const canEliminar = isSecretaria || isSuperadmin
-  const canSubirArchivo = isSecretaria || isDirector || isSuperadmin
+  // Permisos leídos desde rolePermissions (editables en Panel Admin → Roles y Permisos)
+  const can = useMemo(() => makePermissionChecker(user?.rol ?? ''), [user?.rol, permissionsVersion])
+  const canTurnar           = can('turnar')
+  const canReasignar        = can('reasignar') || can('turnar')
+  const canGenerarRespuesta = can('generar_resp')
+  const canFirmar           = can('firmar')
+  const canEnviarParaFirma  = can('enviar_firma')
+  const canDescargarDocx    = can('descargar_docx')
+  const canEliminar         = can('eliminar')
+  const canSubirArchivo     = can('subir_archivo')
+  const canCambiarEstado    = can('cambiar_estado')
 
   // Estado de error del archivo original (si url_storage existe pero la
   // descarga falla — archivo perdido en el servidor, permisos, etc.)
@@ -1475,9 +1799,9 @@ function PanelRecibido({
   }
 
   const handleDevolver = async () => {
-    // Validación defensiva: solo Director, Secretaría o Superadmin pueden devolver
-    if (!isDirector && !isSecretaria && !isSuperadmin) {
-      window.alert('No tiene permiso para devolver documentos. Solo Director o Secretaría.')
+    // Validación definitiva (Backend ya lo valida, pero aquí evitamos el envío)
+    if (!can('devolver')) {
+      window.alert('No tiene permiso para devolver documentos. Solo Director, Subdirector o Superadministrador.')
       return
     }
     if (observacionesDevolucion.trim().length < 10) return
@@ -1627,11 +1951,11 @@ function PanelRecibido({
         {([
           'info',
           'ocr',
-          ...(doc.borrador_respuesta ? ['documento'] : []),
+          ...(doc.borrador_respuesta || hideDocumentVisor ? ['documento'] : []),
           'historial',
         ] as const).map(t => (
           <button key={t} onClick={() => {
-            setTab(t as typeof tab)
+            changeTab(t as typeof tab)
             if (t === 'documento' && !pdfUrl && !loadingPdf) {
               setLoadingPdf(true)
               documentosApi.obtenerOficioPdfUrl(doc.id)
@@ -1643,7 +1967,17 @@ function PanelRecibido({
             className={clsx('flex-1 py-2 text-xs font-medium transition-colors',
               tab === t ? 'border-b-2 text-gray-900' : 'text-gray-500 hover:text-gray-700')}
             style={tab === t ? { borderColor: GUINDA, color: GUINDA } : {}}>
-            {t === 'info' ? 'Datos' : t === 'ocr' ? '🤖 IA' : t === 'documento' ? '📄 Documento' : '📋 Historial'}
+            {t === 'info'
+              ? (hideDocumentVisor
+                  ? <span className="flex items-center justify-center gap-1"><ArrowLeftRight size={12} />Turnar</span>
+                  : <span className="flex items-center justify-center gap-1"><FileText size={12} />Datos</span>)
+              : t === 'ocr'
+              ? (hideDocumentVisor
+                  ? <span className="flex items-center justify-center gap-1"><Wand2 size={12} />Respuesta</span>
+                  : '🤖 IA')
+              : t === 'documento'
+              ? <span className="flex items-center justify-center gap-1"><FileSearch size={12} />Visualizar Docs.</span>
+              : '📋 Historial'}
           </button>
         ))}
       </div>
@@ -1653,6 +1987,43 @@ function PanelRecibido({
         {/* ── Tab: Info ─────────────────────────────────────────────────────── */}
         {tab === 'info' && (
           <>
+            {/* ── Estado del trámite — parte superior ── */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Estado del trámite</p>
+                {canCambiarEstado && <div className="flex gap-1 flex-wrap justify-end">
+                  {(['en_atencion', 'respondido', ...(!doc.requiere_respuesta ? ['de_conocimiento'] : [])] as string[]).map(e => {
+                    const sinTurno     = e === 'en_atencion' && !doc.area_turno_confirmada
+                    const sinRespuesta = e === 'respondido'  && doc.requiere_respuesta && !doc.borrador_respuesta
+                    const bloqueado    = sinTurno || sinRespuesta
+                    return (
+                      <button key={e}
+                        onClick={() => estadoMutation.mutate(e)}
+                        disabled={doc.estado === e || bloqueado}
+                        title={
+                          sinTurno     ? 'Confirma primero el área de turno' :
+                          sinRespuesta ? 'Genera primero la respuesta en el tab Respuesta' :
+                          undefined
+                        }
+                        className={clsx(
+                          'text-[9px] px-2 py-0.5 rounded-full border transition-colors',
+                          doc.estado === e
+                            ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-default'
+                            : bloqueado
+                            ? 'border-gray-200 bg-gray-100 text-gray-300 cursor-not-allowed opacity-50'
+                            : e === 'de_conocimiento'
+                            ? 'border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100'
+                            : 'border-gray-200 text-gray-600 hover:bg-white',
+                        )}>
+                        {ESTADO_RECIBIDO_CONFIG[e as EstadoRecibido]?.label ?? e}
+                      </button>
+                    )
+                  })}
+                </div>}
+              </div>
+              <PipelineRecibido estado={doc.estado} />
+            </div>
+
             {/* Banner memorándum */}
             {doc.tipo === 'memorandum' && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1.5">
@@ -1718,8 +2089,8 @@ function PanelRecibido({
               </div>
             )}
 
-            {/* ── Visor del oficio original — siempre visible ── */}
-            <div className="space-y-1.5">
+            {/* ── Visor del oficio original — oculto cuando ya hay panel PDF externo ── */}
+            {!hideDocumentVisor && <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                   <Eye size={10} /> Documento original
@@ -1798,7 +2169,7 @@ function PanelRecibido({
               {doc.nombre_archivo && (
                 <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
               )}
-            </div>
+            </div>}
 
             {/* Remitente */}
             <div className="bg-gray-50 rounded-lg p-3 space-y-1">
@@ -1813,7 +2184,7 @@ function PanelRecibido({
             </div>
 
             {/* Fechas y plazo */}
-            <div className="grid grid-cols-2 gap-2">
+            <div className={clsx('grid gap-2', doc.fecha_limite ? 'grid-cols-3' : 'grid-cols-2')}>
               <div className="bg-gray-50 rounded-lg p-2">
                 <p className="text-[10px] text-gray-500">Fecha oficio</p>
                 <p className="text-xs font-medium text-gray-800">{doc.fecha_documento ? formatDate(doc.fecha_documento) : '—'}</p>
@@ -1822,20 +2193,16 @@ function PanelRecibido({
                 <p className="text-[10px] text-gray-500">Recibido en DPP</p>
                 <p className="text-xs font-medium text-gray-800">{doc.fecha_recibido ? formatDate(doc.fecha_recibido) : '—'}</p>
               </div>
-            </div>
-
-            {doc.fecha_limite && (
-              <div className="flex items-center gap-2 bg-amber-50 rounded-lg px-3 py-2">
-                <Clock size={13} className="text-amber-600 flex-shrink-0" />
-                <div>
-                  <p className="text-[10px] text-amber-700">Fecha límite de atención</p>
-                  <div className="flex items-center gap-2">
+              {doc.fecha_limite && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2">
+                  <p className="text-[10px] text-amber-700 flex items-center gap-1"><Clock size={9} /> Fecha límite</p>
+                  <div className="flex items-center gap-1 mt-0.5">
                     <p className="text-xs font-semibold text-amber-800">{formatDate(doc.fecha_limite)}</p>
                     <SemaforoAtencion fecha={doc.fecha_limite} estado={doc.estado} />
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Guía del Director — banner con los 3 escenarios de atención */}
             {isDirector && !doc.area_turno_confirmada && doc.estado !== 'firmado' && doc.estado !== 'archivado' && (
@@ -1852,7 +2219,7 @@ function PanelRecibido({
             )}
 
             {/* Área de turno */}
-            <div>
+            <div className="w-full">
               <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Área de turno</p>
 
               {/* Sugerencia IA */}
@@ -2008,72 +2375,49 @@ function PanelRecibido({
               )}
             </div>
 
-            {/* Control de tipo: Requiere respuesta vs Solo conocimiento (Secretaría/Director/Superadmin) */}
+            {/* Control de tipo: Requiere respuesta vs Solo conocimiento */}
             {(isSecretaria || isDirector || isSuperadmin) && !doc.firmado_digitalmente && !['firmado', 'archivado'].includes(doc.estado) && (
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] font-semibold text-gray-700 uppercase tracking-wide">Tipo de oficio</p>
-                    <p className="text-[10px] text-gray-500">
-                      {doc.requiere_respuesta
-                        ? 'Requiere respuesta formal'
-                        : 'Solo conocimiento (sin respuesta)'}
-                    </p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      const nuevoValor = !doc.requiere_respuesta
-                      const confirmMsg = nuevoValor
-                        ? '¿Cambiar a "Requiere respuesta"? El oficio volverá al flujo de atención normal.'
-                        : '¿Cambiar a "Solo conocimiento"? El oficio NO generará respuesta. Esta acción se registra en el historial.'
-                      if (!window.confirm(confirmMsg)) return
-                      try {
-                        await documentosApi.cambiarTipoRespuesta(doc.id, nuevoValor)
-                        invalidate()
-                      } catch (e) {
-                        window.alert('Error: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
-                      }
-                    }}
-                    className={clsx(
-                      'px-3 py-1.5 text-[10px] rounded-md font-medium border transition-colors',
-                      doc.requiere_respuesta
-                        ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                        : 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                    )}
-                  >
-                    {doc.requiere_respuesta ? '→ Cambiar a Conocimiento' : '→ Cambiar a Requiere respuesta'}
-                  </button>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-center justify-between gap-3 w-full">
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-700 uppercase tracking-wide">Tipo de oficio</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {doc.requiere_respuesta ? 'Requiere respuesta formal' : 'Solo conocimiento (sin respuesta)'}
+                  </p>
                 </div>
+                <button
+                  onClick={async () => {
+                    const nuevoValor = !doc.requiere_respuesta
+                    const confirmMsg = nuevoValor
+                      ? '¿Cambiar a "Requiere respuesta"? El oficio volverá al flujo de atención normal.'
+                      : '¿Cambiar a "Solo conocimiento"? El oficio NO generará respuesta. Esta acción se registra en el historial.'
+                    if (!window.confirm(confirmMsg)) return
+                    try {
+                      await documentosApi.cambiarTipoRespuesta(doc.id, nuevoValor)
+                      invalidate()
+                    } catch (e) {
+                      window.alert('Error: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
+                    }
+                  }}
+                  className={clsx(
+                    'flex-shrink-0 px-3 py-1.5 text-[10px] rounded-md font-medium border transition-colors',
+                    doc.requiere_respuesta
+                      ? 'border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                      : 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  )}
+                >
+                  {doc.requiere_respuesta ? '→ Cambiar a Conocimiento' : '→ Cambiar a Requiere respuesta'}
+                </button>
               </div>
             )}
 
-            {/* Pipeline */}
-            <div>
-              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Estado del trámite</p>
-              <PipelineRecibido estado={doc.estado} />
-              <div className="flex gap-1 mt-2 flex-wrap">
-                {(['en_atencion', 'respondido', ...(!doc.requiere_respuesta ? ['de_conocimiento'] : [])] as string[]).map(e => (
-                  <button key={e} onClick={() => estadoMutation.mutate(e)}
-                    disabled={doc.estado === e}
-                    className={clsx(
-                      'text-[10px] px-2 py-1 rounded-full border transition-colors',
-                      doc.estado === e ? 'border-gray-300 bg-gray-100 text-gray-500 cursor-default'
-                        : e === 'de_conocimiento' ? 'border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100'
-                        : 'border-gray-200 text-gray-600 hover:bg-gray-50',
-                    )}>
-                    {ESTADO_RECIBIDO_CONFIG[e as EstadoRecibido]?.label ?? e}
-                  </button>
-                ))}
-              </div>
-            </div>
           </>
         )}
 
         {/* ── Tab: IA (Oficio original + Generación con instrucciones) ──── */}
         {tab === 'ocr' && (
           <>
-            {/* ── Visor del oficio original (turnado) — siempre visible ── */}
-            <div className="space-y-2">
+            {/* ── Visor del oficio original (turnado) — oculto cuando hay panel PDF externo ── */}
+            {!hideDocumentVisor && <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
                   <Eye size={10} /> Oficio original (turnado)
@@ -2153,7 +2497,7 @@ function PanelRecibido({
               {doc.nombre_archivo && (
                 <p className="text-[10px] text-gray-400 text-center truncate">{doc.nombre_archivo}</p>
               )}
-            </div>
+            </div>}
 
             {/* Upload scan (si no tiene archivo aún) */}
             {!doc.url_storage && (
@@ -2171,8 +2515,8 @@ function PanelRecibido({
               </div>
             )}
 
-            {/* Reemplazar scan (si ya tiene archivo) */}
-            {doc.url_storage && (
+            {/* Reemplazar scan — oculto en modo flotante */}
+            {!hideDocumentVisor && doc.url_storage && (
               <div>
                 <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.tiff,.webp,.doc,.docx"
                   className="hidden"
@@ -2182,6 +2526,103 @@ function PanelRecibido({
                   className="w-full flex items-center justify-center gap-2 border border-gray-200 rounded-lg py-1.5 text-[10px] text-gray-500 hover:bg-gray-50 transition-colors">
                   {procesando ? <><RotateCcw size={10} className="animate-spin" /> Procesando...</> : <><Upload size={10} /> Reemplazar documento</>}
                 </button>
+              </div>
+            )}
+
+            {/* ── Estado del trámite — visible en tab Respuesta ── */}
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Estado del trámite</p>
+                {canCambiarEstado && <div className="flex gap-1 flex-wrap justify-end">
+                  {(['en_atencion', 'respondido', ...(!doc.requiere_respuesta ? ['de_conocimiento'] : [])] as string[]).map(e => {
+                    const sinTurno     = e === 'en_atencion' && !doc.area_turno_confirmada
+                    const sinRespuesta = e === 'respondido'  && doc.requiere_respuesta && !doc.borrador_respuesta
+                    const bloqueado    = sinTurno || sinRespuesta
+                    return (
+                      <button key={e}
+                        onClick={() => estadoMutation.mutate(e)}
+                        disabled={doc.estado === e || bloqueado}
+                        title={
+                          sinTurno     ? 'Confirma primero el área de turno' :
+                          sinRespuesta ? 'Genera primero la respuesta' :
+                          undefined
+                        }
+                        className={clsx(
+                          'text-[9px] px-2 py-0.5 rounded-full border transition-colors',
+                          doc.estado === e
+                            ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-default'
+                            : bloqueado
+                            ? 'border-gray-200 bg-gray-100 text-gray-300 cursor-not-allowed opacity-50'
+                            : e === 'de_conocimiento'
+                            ? 'border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100'
+                            : 'border-gray-200 text-gray-600 hover:bg-white',
+                        )}>
+                        {ESTADO_RECIBIDO_CONFIG[e as EstadoRecibido]?.label ?? e}
+                      </button>
+                    )
+                  })}
+                </div>}
+              </div>
+              <PipelineRecibido estado={doc.estado} />
+            </div>
+
+            {/* ── Datos del oficio de respuesta — al inicio en modo flotante ── */}
+            {hideDocumentVisor && canGenerarRespuesta && (
+              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Datos del oficio de respuesta</p>
+                <div>
+                  <label className="text-[10px] text-gray-500">Folio de respuesta</label>
+                  <div className="flex gap-1.5">
+                    <input type="text" placeholder="SFA/SF/DPP/SPFP/0001/2026"
+                      className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none font-mono"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={folioLocal} onChange={e => setFolioLocal(e.target.value)}
+                      onBlur={() => folioLocal !== (doc.folio_respuesta ?? '') && guardarFolioRef('folio', folioLocal)} />
+                    {!folioLocal && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            const { folio } = await documentosApi.siguienteFolio(doc.tipo?.toUpperCase() || 'OFICIO', doc.area_turno || undefined)
+                            setFolioLocal(folio)
+                            await documentosApi.update(doc.id, { folio_respuesta: folio })
+                            invalidate()
+                          } catch { /* */ }
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-[9px] font-medium rounded-md border transition-colors whitespace-nowrap"
+                        style={{ borderColor: GUINDA, color: GUINDA }}
+                        title="Generar folio consecutivo automático">
+                        <Hash size={10} /> Auto
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500">Fecha del oficio de respuesta</label>
+                  <input type="text" placeholder="16 de marzo de 2026 (dejar vacío = fecha actual)"
+                    className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                    style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                    value={fechaRespLocal} onChange={e => setFechaRespLocal(e.target.value)}
+                    onBlur={() => fechaRespLocal !== (doc.fecha_respuesta ?? '') && guardarFolioRef('fecha', fechaRespLocal)} />
+                  <p className="text-[9px] text-gray-400 mt-0.5">Si se deja vacío, se usa la fecha del día de descarga</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-gray-500">Elaboró</label>
+                    <input type="text" placeholder="ECJ"
+                      className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={elaboroLocal} onChange={e => setElaboro(e.target.value)}
+                      onBlur={() => elaboroLocal !== (doc.referencia_elaboro ?? '') && guardarFolioRef('elaboro', elaboroLocal)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500">Revisó</label>
+                    <input type="text" placeholder="bhs"
+                      className="w-full border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-1 focus:outline-none"
+                      style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
+                      value={revisoLocal} onChange={e => setReviso(e.target.value)}
+                      onBlur={() => revisoLocal !== (doc.referencia_reviso ?? '') && guardarFolioRef('reviso', revisoLocal)} />
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2285,8 +2726,8 @@ function PanelRecibido({
             {/* ── Borrador generado (visible para todos los roles) ── */}
             {doc.borrador_respuesta && (
               <>
-                {/* Datos del oficio de respuesta (editable solo por área/director/super) */}
-                {canGenerarRespuesta && (
+                {/* Datos del oficio de respuesta — solo en vista normal (en flotante aparece arriba) */}
+                {canGenerarRespuesta && !hideDocumentVisor && (
                   <div className="bg-gray-50 rounded-lg p-3 space-y-2">
                     <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Datos del oficio de respuesta</p>
                     <div>
@@ -2441,8 +2882,67 @@ function PanelRecibido({
                   </div>
                 )}
 
-                {/* Texto del borrador */}
-                {editBorrador && canGenerarRespuesta ? (
+                {/* ── Fila horizontal: Editar borrador | Descargar oficio | Firmar documento ── */}
+                <div className="flex gap-2">
+                  {canGenerarRespuesta && doc.borrador_respuesta && (
+                    <button onClick={() => { setEditBorrador(prev => !prev); setBorradorText(doc.borrador_respuesta ?? '') }}
+                      className={clsx(
+                        'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border transition-colors',
+                        editBorrador
+                          ? 'bg-gray-100 border-gray-400 text-gray-700'
+                          : 'border-gray-300 text-gray-600 hover:bg-gray-50',
+                      )}>
+                      <Edit3 size={11} /> Editar borrador
+                    </button>
+                  )}
+                  {canDescargarDocx && (
+                    <button onClick={handleDescargarOficio} disabled={descargando}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                      {descargando
+                        ? <><RotateCcw size={11} className="animate-spin" /> Generando…</>
+                        : <><Download size={11} /> Descargar oficio</>}
+                    </button>
+                  )}
+                  {doc.firmado_digitalmente ? (
+                    <div className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                      <CheckCircle2 size={12} className="text-emerald-600" />
+                      <span className="text-[10px] font-medium text-emerald-700">Firmado</span>
+                    </div>
+                  ) : doc.estado === 'respondido' && !canFirmar ? (
+                    <div className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                      <Clock size={12} className="text-amber-600" />
+                      <span className="text-[10px] font-medium text-amber-700">En espera de firma</span>
+                    </div>
+                  ) : canFirmar ? (
+                    <button onClick={() => setShowFirmaModal(true)}
+                      disabled={!['en_atencion', 'respondido', 'borrador', 'en_revision', 'turnado'].includes(doc.estado)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium border transition-colors disabled:opacity-50"
+                      style={{ borderColor: GUINDA, color: GUINDA }}>
+                      <FileSignature size={11} /> Firmar documento
+                    </button>
+                  ) : canEnviarParaFirma ? (
+                    <button onClick={async () => {
+                      try {
+                        setEnviandoFirma(true)
+                        await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
+                        setEnviadoFirmaOk(true)
+                        setTimeout(() => setEnviadoFirmaOk(false), 4000)
+                        invalidate()
+                      } catch (e) { window.alert('Error al enviar para firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
+                      } finally { setEnviandoFirma(false) }
+                    }}
+                      disabled={doc.estado === 'respondido' || enviandoFirma}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white disabled:opacity-50 transition-colors"
+                      style={{ backgroundColor: GUINDA }}>
+                      {enviandoFirma
+                        ? <><RotateCcw size={11} className="animate-spin" /> Enviando…</>
+                        : <><Send size={11} /> Enviar a firma</>}
+                    </button>
+                  ) : null}
+                </div>
+
+                {/* Editor expandible — aparece bajo la fila de botones */}
+                {editBorrador && canGenerarRespuesta && (
                   <div className="space-y-2">
                     <textarea rows={10} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs resize-none focus:ring-1"
                       style={{ '--tw-ring-color': GUINDA } as React.CSSProperties}
@@ -2458,83 +2958,20 @@ function PanelRecibido({
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                      <p className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">{doc.borrador_respuesta}</p>
-                    </div>
-                    {canGenerarRespuesta && (
-                      <button onClick={() => { setEditBorrador(true); setBorradorText(doc.borrador_respuesta ?? '') }}
-                        className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">
-                        <Edit3 size={11} /> Editar borrador
-                      </button>
-                    )}
-                  </div>
                 )}
 
-                {/* ── Acciones según rol ── */}
-                <div className="space-y-2 pt-1">
-                  {/* Descargar DOCX — solo Director y Administrador */}
-                  {canDescargarDocx && (
-                    <button onClick={handleDescargarOficio} disabled={descargando}
-                      className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium text-white transition-colors bg-blue-600 hover:bg-blue-700 disabled:opacity-50">
-                      {descargando
-                        ? <><RotateCcw size={12} className="animate-spin" /> Generando DOCX...</>
-                        : <><Download size={12} /> Descargar oficio (.docx)</>}
-                    </button>
-                  )}
-
-                  {doc.firmado_digitalmente ? (
-                    <div className="flex items-center justify-center gap-2 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
-                      <CheckCircle2 size={14} className="text-emerald-600" />
-                      <span className="text-xs font-medium text-emerald-700">Documento firmado electrónicamente</span>
-                    </div>
-                  ) : doc.estado === 'respondido' && !canFirmar ? (
-                    <div className="flex items-center justify-center gap-2 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-                      <Clock size={14} className="text-amber-600" />
-                      <span className="text-xs font-medium text-amber-700">Enviado para firma del Director</span>
-                    </div>
-                  ) : canFirmar ? (
-                    <button onClick={() => setShowFirmaModal(true)}
-                      disabled={!['en_atencion', 'respondido', 'borrador', 'en_revision', 'turnado'].includes(doc.estado)}
-                      className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium border transition-colors disabled:opacity-50"
-                      style={{ borderColor: GUINDA, color: GUINDA }}>
-                      <FileSignature size={12} /> Firmar documento
-                    </button>
-                  ) : canEnviarParaFirma ? (
-                    <button onClick={async () => {
-                      try {
-                        setEnviandoFirma(true)
-                        await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
-                        setEnviadoFirmaOk(true)
-                        setTimeout(() => setEnviadoFirmaOk(false), 4000)
-                        invalidate()
-                      } catch (e) { window.alert('Error al enviar para firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo'))
-                      } finally { setEnviandoFirma(false) }
-                    }}
-                      disabled={doc.estado === 'respondido' || enviandoFirma}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg font-medium text-white transition-colors disabled:opacity-50"
-                      style={{ backgroundColor: GUINDA }}>
-                      {enviandoFirma
-                        ? <><RotateCcw size={12} className="animate-spin" /> Enviando...</>
-                        : <><Send size={12} /> Enviar para firma del Director</>}
-                    </button>
-
-                  ) : null}
-
-                  {/* Toast confirmación de envío a firma */}
-                  {enviadoFirmaOk && (
-                    <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg animate-pulse">
-                      <CheckCircle2 size={14} className="text-emerald-600" />
-                      <span className="text-xs font-medium text-emerald-700">Oficio enviado para firma del Director</span>
-                    </div>
-                  )}
-                </div>
+                {/* Toast confirmación de envío a firma */}
+                {enviadoFirmaOk && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg animate-pulse">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    <span className="text-xs font-medium text-emerald-700">Oficio enviado para firma del Director</span>
+                  </div>
+                )}
               </>
             )}
 
-            {/* Datos extraídos (resumen compacto) */}
-            {doc.ocr_procesado && datosIA && (
+            {/* Datos extraídos (resumen compacto) — oculto en modo flotante */}
+            {!hideDocumentVisor && doc.ocr_procesado && datosIA && (
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Datos extraídos por IA</p>
                 <div className="grid grid-cols-2 gap-1.5">
@@ -2852,50 +3289,46 @@ function PanelRecibido({
             </div>
           ) : ['en_atencion', 'respondido', 'de_conocimiento'].includes(doc.estado) && doc.borrador_respuesta ? (
             <div className="space-y-2">
+              {/* Fila horizontal: Enviar/Re-enviar a firma + Devolver para correcciones */}
               <div className="flex gap-2">
-                {isDirector ? (
+                {canFirmar ? (
                   <button onClick={() => setShowFirmaModal(true)}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
                     style={{ backgroundColor: GUINDA }}>
-                    <FileSignature size={13} /> Firmar documento
+                    <FileSignature size={12} /> Firmar documento
                   </button>
-                ) : (
+                ) : (!hideDocumentVisor || tab === 'ocr') && canEnviarParaFirma ? (
                   <button onClick={async () => {
                     try {
-                      // Siempre ejecutable: si ya está 'respondido', el backend responde
-                      // idempotentemente (no falla), permitiendo re-confirmar envío tras
-                      // regenerar el borrador.
                       await documentosApi.cambiarEstado(doc.id, 'respondido' as never)
                       invalidate()
                       setEnviadoFirmaOk(true)
                       setTimeout(() => setEnviadoFirmaOk(false), 4000)
                     } catch (e) { window.alert('Error al enviar a firma: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                   }}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg text-white font-semibold transition-colors hover:opacity-90"
                     style={{ backgroundColor: GUINDA }}>
-                    <Send size={13} />
-                    {doc.estado === 'respondido'
-                      ? 'Re-enviar a firma del Director'
-                      : 'Enviar a firma del Director'}
+                    <Send size={12} />
+                    {doc.estado === 'respondido' ? 'Re-enviar a firma' : 'Enviar a firma'}
+                  </button>
+                ) : null}
+                {(!hideDocumentVisor || tab === 'ocr') && can('devolver') && (
+                  <button onClick={() => { setObservacionesDevolucion(''); setShowDevolucionModal(true) }}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium bg-red-50 border border-red-300 text-red-700 hover:bg-red-100 transition-colors">
+                    <AlertTriangle size={11} /> Devolver para correcciones
                   </button>
                 )}
               </div>
-              {(isDirector || isSecretaria || isSuperadmin) && (
-                <button onClick={() => { setObservacionesDevolucion(''); setShowDevolucionModal(true) }}
-                  className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium bg-red-50 border border-red-300 text-red-700 hover:bg-red-100 transition-colors">
-                  <AlertTriangle size={12} /> Devolver para correcciones
-                </button>
-              )}
-              {/* Visto Bueno del Subdirector */}
-              {user?.rol === 'subdirector' && !doc.visto_bueno_subdirector && (
+              {/* Visto Bueno del Subdirector (u otro mando medio autorizado) */}
+              {(!hideDocumentVisor || tab === 'ocr') && can('visto_bueno') && !doc.visto_bueno_subdirector && (
                 <button onClick={async () => {
-                  try { await documentosApi.registrarVistoBueno(doc.id); invalidate() } catch (e) { window.alert('Error: ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
+                  try { await documentosApi.registrarVistoBueno(doc.id); invalidate() } catch (e) { window.alert('Error (Visto Bueno): ' + ((e as any)?.response?.data?.detail || 'Intente de nuevo')) }
                 }}
                   className="w-full flex items-center justify-center gap-2 py-2 text-xs rounded-lg font-medium bg-green-50 border border-green-300 text-green-700 hover:bg-green-100 transition-colors">
                   <CheckCircle2 size={12} /> Dar Visto Bueno
                 </button>
               )}
-              {doc.visto_bueno_subdirector && (
+              {(!hideDocumentVisor || tab === 'ocr') && doc.visto_bueno_subdirector && (
                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg">
                   <CheckCircle2 size={12} className="text-green-600" />
                   <span className="text-[10px] text-green-700 font-medium">Visto Bueno del Subdirector registrado</span>
@@ -3311,11 +3744,13 @@ function PanelEmitido({
   const isSecretaria = user?.rol === 'secretaria'
   const isAsesor = user?.rol === 'asesor'
   const isArea = ['analista', 'subdirector', 'jefe_depto'].includes(user?.rol || '')
-  const canGenerar = isSecretaria || isAsesor || isArea || isDirector || isSuperadmin
-  const canFirmar = isDirector || isSuperadmin
-  const canEnviarParaFirma = isSecretaria || isAsesor || isArea || isSuperadmin
-  const canDescargarDocx = isDirector || isSuperadmin
-  const canEliminar = isSecretaria || isSuperadmin
+  const permissionsVersionEmitido = usePermissionsVersion()
+  const canEmitido = useMemo(() => makePermissionChecker(user?.rol ?? ''), [user?.rol, permissionsVersionEmitido])
+  const canGenerar = canEmitido('generar_resp')
+  const canFirmar = canEmitido('firmar')
+  const canEnviarParaFirma = canEmitido('enviar_firma')
+  const canDescargarDocx = canEmitido('descargar_docx')
+  const canEliminar = canEmitido('eliminar')
   const canEditar = doc.estado === 'borrador' || (doc.estado === 'en_revision' && canFirmar)
 
   // Error del archivo original (si url_storage existe pero la carga falla)
@@ -4282,6 +4717,7 @@ export default function GestionDocumental() {
   const [showModalRecibido, setShowModalRecibido] = useState(false)
   const [showModalEmitido, setShowModalEmitido] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [panelTab, setPanelTab] = useState<'info' | 'ocr' | 'documento' | 'historial'>('info')
   // Modal edición rápida (secretaria)
   const [editDocId, setEditDocId] = useState<string | null>(null)
   // Multi-select para firma por lote
@@ -4294,10 +4730,18 @@ export default function GestionDocumental() {
   const [showMemoModal, setShowMemoModal] = useState(false)
   // Toast de confirmación
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
-  // Roles
+  // Roles (usados para lógica interna que no es configurable desde AdminPermisos)
   const isDirector = user?.rol === 'admin_cliente' || user?.rol === 'superadmin'
   const isSecretaria = user?.rol === 'secretaria'
   const isReadOnly = user?.rol === 'auditor'
+  // Permisos configurables desde AdminPermisos → Roles y Permisos
+  const permissionsVersionMain = usePermissionsVersion()
+  const canMain = useMemo(() => makePermissionChecker(user?.rol ?? ''), [user?.rol, permissionsVersionMain])
+  const canCrearDocumento    = canMain('crear_oficio')
+  const canFirmarLote        = canMain('firmar_lote')
+  const canVerCert           = canMain('registrar_cert')
+  const canVerVisorFlotante  = canMain('ver_visor_flotante')
+  const canRegistrarMemo     = canMain('registrar_memo')
 
   // Debounce de búsqueda (300ms)
   useEffect(() => {
@@ -4388,16 +4832,14 @@ export default function GestionDocumental() {
     queryFn:  documentosApi.areas,
   })
 
-  // Catálogo oficial de UPPs (Listado 2026) — se usa para mostrar "código - nombre"
-  // en la columna UPP del monitor. Sin esto, se muestra lo que venga del OCR
-  // (a veces un nombre de área/dirección que NO es una UPP real).
-  const { data: uppsCatalogo = [] } = useQuery<UPP[]>({
-    queryKey: ['upps-catalogo'],
-    queryFn:  () => uppsApi.list(),
-    staleTime: 10 * 60 * 1000,
+  // Catálogo de dependencias del Panel Admin — fuente única para la columna UPP
+  const { data: uppsCatalogo = [] } = useQuery<Cliente[]>({
+    queryKey: ['clientes-catalogo-main'],
+    queryFn:  clientesApi.list,
+    staleTime: 10 * 60_000,
   })
+
   // Normalizador: minúsculas, sin acentos, sin puntuación, colapsa espacios.
-  // Se usa para matching fuzzy del catálogo UPP contra el remitente del OCR.
   const normalizeText = (s: string): string =>
     s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
@@ -4405,91 +4847,100 @@ export default function GestionDocumental() {
       .replace(/\s+/g, ' ')
       .trim()
 
-  const uppsByCode: Record<string, UPP> = {}
-  const uppsByName: Record<string, UPP> = {}
-  const uppsNorm: Array<{ u: UPP; nombreN: string; siglaN: string | null }> = []
+  const uppsByCode: Record<string, Cliente> = {}
+  const uppsByName: Record<string, Cliente> = {}
+  const uppsNorm: Array<{ u: Cliente; nombreN: string }> = []
+
   for (const u of uppsCatalogo) {
-    uppsByCode[u.codigo.toUpperCase()] = u
+    if (!u.activo) continue
+    const code = u.codigo_upp.toUpperCase().trim()
+    // Indexar por el código exacto del catálogo
+    uppsByCode[code] = u
+    // Si el código es puramente numérico, indexar también sin ceros y con 2/3 dígitos
+    // para tolerar variantes del OCR ("7", "07", "007" → mismo registro)
+    if (/^\d+$/.test(code)) {
+      const n = parseInt(code, 10)
+      uppsByCode[String(n)]              = u   // "7"
+      uppsByCode[String(n).padStart(2, '0')] = u   // "07"
+      uppsByCode[String(n).padStart(3, '0')] = u   // "007"
+    }
     uppsByName[u.nombre.toLowerCase()] = u
-    if (u.sigla) uppsByName[u.sigla.toLowerCase()] = u
-    uppsNorm.push({
-      u,
-      nombreN: normalizeText(u.nombre),
-      siglaN: u.sigla ? normalizeText(u.sigla) : null,
-    })
+    uppsNorm.push({ u, nombreN: normalizeText(u.nombre) })
   }
 
-  // Busca la mejor UPP contra un texto libre (por ejemplo, "SUBSECRETARIA DE
-  // FINANZAS Y ADMINISTRACIÓN" debe mapear a UPP 007 "Secretaría de Finanzas y
-  // Administración"). Devuelve la UPP con mejor score o null si no hay match.
-  const fuzzyFindUpp = (texto: string): UPP | null => {
+  // Busca la mejor dependencia para un texto libre usando matching fuzzy.
+  const fuzzyFindUpp = (texto: string): Cliente | null => {
     const tN = normalizeText(texto)
     if (!tN || tN.length < 3) return null
-    // 1) Match exacto por nombre o sigla normalizados
-    for (const { u, nombreN, siglaN } of uppsNorm) {
+    // 1) Match exacto por nombre normalizado
+    for (const { u, nombreN } of uppsNorm) {
       if (nombreN === tN) return u
-      if (siglaN && siglaN === tN) return u
     }
-    // 2) Contención: uno contiene al otro (cubre abreviaciones comunes tipo
-    //    "SUBSECRETARIA DE FINANZAS..." ↔ "Secretaría de Finanzas y Administración")
+    // 2) Contención por tokens significativos
     const tTokens = tN.split(' ').filter(w => w.length >= 4)
-    let best: { u: UPP; score: number } | null = null
+    let best: { u: Cliente; score: number } | null = null
     for (const { u, nombreN } of uppsNorm) {
       const nTokens = nombreN.split(' ').filter(w => w.length >= 4)
       if (!nTokens.length) continue
-      // Cuenta tokens significativos en común
       const comunes = tTokens.filter(t => nTokens.some(n => n === t || n.includes(t) || t.includes(n)))
       const score = comunes.length / Math.max(nTokens.length, tTokens.length)
-      if (score >= 0.5 && (!best || score > best.score)) {
-        best = { u, score }
-      }
+      if (score >= 0.5 && (!best || score > best.score)) best = { u, score }
     }
     return best ? best.u : null
   }
 
-  // Formato de display del código: catálogo usa 3 dígitos ("007", "019"),
-  // pero el formato esperado por la DPP es 2 dígitos sin cero a la izquierda
-  // (p.ej. "07 - Secretaría de Finanzas y Administración"). Los códigos
-  // alfanuméricos ("A13") o de 3+ dígitos ("115") se respetan tal cual.
-  const displayUppCode = (codigo: string): string => {
-    const c = codigo.trim()
-    if (/^\d+$/.test(c)) {
-      const n = parseInt(c, 10)
-      return n.toString().padStart(2, '0') // 007→07, 115→115, 7→07
-    }
-    return c
-  }
-  const labelUpp = (u: UPP): string => `${displayUppCode(u.codigo)} - ${u.nombre}`
+  // Etiqueta final: usa el código_upp exactamente como está en el catálogo del Admin Panel
+  const labelUpp = (u: Cliente): string => `${u.codigo_upp} - ${u.nombre}`
 
-  // Devuelve una etiqueta "NN - Nombre" para una UPP a partir del código explícito,
-  // el texto de OCR en upp_solicitante, o el remitente (remitente_dependencia /
-  // dependencia_origen). El remitente suele ser la institución externa que envía
-  // el oficio y casi siempre corresponde a una UPP del catálogo.
+  // Devuelve la etiqueta buscando por código, texto OCR o remitente.
   const formatUpp = (
     codigo: string | null | undefined,
     texto: string | null | undefined,
     remitente?: string | null,
   ): string | null => {
+    // Normaliza un código para buscar en el índice (sin UPP prefix, solo alfanumérico)
+    const normCode = (raw: string): string => raw.toUpperCase().trim()
+      .replace(/^UPP[\s-]*/i, '').replace(/[^A-Z0-9]/g, '')
+
     // 1) Código explícito guardado en la BD
     if (codigo) {
-      const u = uppsByCode[codigo.toUpperCase().trim()]
-      if (u) return labelUpp(u)
+      const nc = normCode(codigo)
+      // Probar el código tal cual, y también variantes numéricas
+      const tries = [nc]
+      if (/^\d+$/.test(nc)) {
+        const n = parseInt(nc, 10)
+        tries.push(String(n), String(n).padStart(2, '0'), String(n).padStart(3, '0'))
+      }
+      for (const t of tries) { if (uppsByCode[t]) return labelUpp(uppsByCode[t]) }
     }
-    // 2) Texto del OCR: puede ser un código "016" o un nombre/sigla
+
+    // 2) Texto del OCR
     if (texto) {
       const t = texto.trim()
-      const tCode = t.toUpperCase().replace(/^UPP\s*/i, '').replace(/[^A-Z0-9]/g, '')
-      if (tCode && uppsByCode[tCode]) return labelUpp(uppsByCode[tCode])
+      const nc = normCode(t)
+      if (nc && uppsByCode[nc]) return labelUpp(uppsByCode[nc])
+      // Variantes numéricas
+      if (/^\d+$/.test(nc)) {
+        const n = parseInt(nc, 10)
+        for (const variant of [String(n), String(n).padStart(2, '0'), String(n).padStart(3, '0')]) {
+          if (uppsByCode[variant]) return labelUpp(uppsByCode[variant])
+        }
+      }
       const tLower = t.toLowerCase()
       if (uppsByName[tLower]) return labelUpp(uppsByName[tLower])
-      const m = t.match(/^\s*([A-Z0-9]{2,4})\b/i)
-      if (m && uppsByCode[m[1].toUpperCase()]) return labelUpp(uppsByCode[m[1].toUpperCase()])
-      // Intentar match fuzzy contra el nombre (p.ej. "SFA" → UPP 007)
+      // Código al inicio del texto, p.ej. "007 SFA" o "07-SecFin"
+      const m = t.match(/^\s*(\d{1,4})\b/i)
+      if (m) {
+        const n = parseInt(m[1], 10)
+        for (const variant of [String(n), String(n).padStart(2, '0'), String(n).padStart(3, '0')]) {
+          if (uppsByCode[variant]) return labelUpp(uppsByCode[variant])
+        }
+      }
       const fz = fuzzyFindUpp(t)
       if (fz) return labelUpp(fz)
     }
-    // 3) Como último recurso, intentar con el remitente (dependencia que envía el
-    //    oficio). La mayoría de los oficios vienen de instituciones del catálogo.
+
+    // 3) Remitente como último recurso
     if (remitente) {
       const fz = fuzzyFindUpp(remitente)
       if (fz) return labelUpp(fz)
@@ -4502,6 +4953,47 @@ export default function GestionDocumental() {
     queryFn:  () => selectedId ? documentosApi.get(selectedId) : null,
     enabled:  !!selectedId,
   })
+
+  // ── Floating panel (Turnar / Respuesta / Historial) ──────────────────────────
+  const [floatingDocId, setFloatingDocId]   = useState<string | null>(null)
+  const [floatingDocTab, setFloatingDocTab] = useState<'info' | 'ocr' | 'documento' | 'historial'>('info')
+  const [floatingPdfUrl, setFloatingPdfUrl]     = useState<string | null>(null)
+  const [floatingPdfLoading, setFloatingPdfLoading] = useState(false)
+  const { data: floatingDoc } = useQuery({
+    queryKey: ['documento', floatingDocId],
+    queryFn:  () => floatingDocId ? documentosApi.get(floatingDocId) : null,
+    enabled:  !!floatingDocId,
+  })
+  const [floatingActiveTab, setFloatingActiveTab] = useState<string>('info')
+
+  const loadFloatingPdf = useCallback((docId: string, activeTab: string) => {
+    setFloatingPdfLoading(true)
+    const loader = activeTab === 'ocr'
+      ? documentosApi.obtenerOficioPdfUrl(docId)
+      : documentosApi.obtenerArchivoOriginalUrl(docId)
+    loader
+      .then(url => setFloatingPdfUrl(url))
+      .catch(() => setFloatingPdfUrl(null))
+      .finally(() => setFloatingPdfLoading(false))
+  }, [])
+
+  useEffect(() => {
+    if (!floatingDocId) { setFloatingPdfUrl(null); return }
+    loadFloatingPdf(floatingDocId, floatingActiveTab)
+  }, [floatingDocId])
+
+  const handleFloatingTabChange = useCallback((newTab: string) => {
+    setFloatingActiveTab(newTab)
+    if (floatingDocId) loadFloatingPdf(floatingDocId, newTab)
+  }, [floatingDocId, loadFloatingPdf])
+
+  // Recargar PDF de respuesta cuando se genera el borrador estando en tab 'ocr'
+  const floatingDocBorrador = floatingDoc?.borrador_respuesta
+  useEffect(() => {
+    if (floatingDocId && floatingActiveTab === 'ocr' && floatingDocBorrador) {
+      loadFloatingPdf(floatingDocId, 'ocr')
+    }
+  }, [floatingDocBorrador])
 
   const deleteMutation = useMutation({
     mutationFn: documentosApi.delete,
@@ -4573,8 +5065,8 @@ export default function GestionDocumental() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {/* Indicador e.firma — solo Director */}
-              {isDirector && (
+              {/* Indicador e.firma */}
+              {canVerCert && (
                 <button
                   onClick={() => setShowCertModal(true)}
                   className={clsx(
@@ -4599,7 +5091,7 @@ export default function GestionDocumental() {
                 </button>
               )}
 
-              {tab === 'recibidos' && isDirector && (
+              {tab === 'recibidos' && canFirmarLote && (
                 <button
                   onClick={() => {
                     if (multiSelectMode) {
@@ -4621,7 +5113,7 @@ export default function GestionDocumental() {
                   {multiSelectMode ? 'Cancelar selección' : 'Firma por lote'}
                 </button>
               )}
-              {tab !== 'oficios' && !isReadOnly && (
+              {tab !== 'oficios' && canCrearDocumento && (
                 <Button size="sm" onClick={() => tab === 'recibidos' ? setShowModalRecibido(true) : setShowModalEmitido(true)}>
                   <Plus size={13} />
                   {tab === 'recibidos' ? 'Registrar recibido' : 'Nuevo emitido'}
@@ -4668,7 +5160,7 @@ export default function GestionDocumental() {
                 </div>
               ))}
             </div>
-            {(isSecretaria || isDirector) && (
+            {canRegistrarMemo && (
               <button onClick={() => setShowMemoModal(true)}
                 className="w-full flex items-center justify-center gap-1.5 py-2 text-xs rounded-lg font-medium text-white transition-colors hover:opacity-90"
                 style={{ backgroundColor: '#911A3A' }}>
@@ -5095,15 +5587,15 @@ export default function GestionDocumental() {
                     <tr className="text-white" style={{ backgroundColor: '#911A3A' }}>
                       {multiSelectMode && <th className="px-2 py-2.5 w-8" />}
                       {([
-                        ['oficio', 'No. Oficio', 'left'],
-                        ['asunto', 'Asunto', 'left'],
-                        ['remitente', 'Remitente', 'left'],
-                        ['area', 'Area', 'left'],
-                        ['upp', 'UPP', 'left'],
-                        ['estado', 'Estado', 'center'],
-                        ['check', 'V°B° Subdir.', 'center'],
-                        ['atencion', 'Atención', 'left'],
                         ['fecha', 'Fecha', 'left'],
+                        ['oficio', 'No. Oficio', 'left'],
+                        ['upp', 'UPP', 'left'],
+                        ['remitente', 'Remitente', 'left'],
+                        ['asunto', 'Asunto', 'left'],
+                        ['area', 'Área', 'left'],
+                        ['atencion', 'Atención', 'left'],
+                        ['check', 'V°B° Sub.', 'center'],
+                        ['estado', 'Estado', 'center'],
                       ] as const).map(([key, label, align]) => (
                         <th key={key} className={`px-3 py-2.5 text-${align} text-xs font-semibold relative`}
                           style={{ width: colW[key], minWidth: 50 }}>
@@ -5112,9 +5604,7 @@ export default function GestionDocumental() {
                             onMouseDown={e => onColResize(key, e)} />
                         </th>
                       ))}
-                      {(user?.rol === 'secretaria' || user?.rol === 'superadmin') && (
-                        <th className="px-3 py-2.5 text-center text-xs font-semibold">Acciones</th>
-                      )}
+                      <th className="px-3 py-2.5 text-center text-xs font-semibold">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -5134,13 +5624,13 @@ export default function GestionDocumental() {
                                   return next
                                 })
                               }
-                            } else {
-                              setSelectedId(doc.id === selectedId ? null : doc.id)
+                            } else if (canVerVisorFlotante) {
+                              setFloatingDocTab('info'); setFloatingActiveTab('info'); setFloatingDocId(doc.id === floatingDocId ? null : doc.id)
                             }
                           }}
                           className={clsx(
                             'cursor-pointer transition-colors',
-                            doc.id === selectedId ? 'bg-[#FDF8F9]' : isToday ? 'bg-blue-50/30 hover:bg-blue-50/60' : 'hover:bg-gray-50',
+                            doc.id === floatingDocId ? 'bg-[#FDF8F9]' : isToday ? 'bg-blue-50/30 hover:bg-blue-50/60' : 'hover:bg-gray-50',
                             multiSelectMode && !canSelect && 'opacity-50',
                             multiSelectMode && selectedIds.has(doc.id) && 'bg-[#FDF8F9] ring-1 ring-inset ring-[#911A3A]/20',
                           )}>
@@ -5154,6 +5644,13 @@ export default function GestionDocumental() {
                               </div>
                             </td>
                           )}
+                          {/* Fecha */}
+                          <td className="px-3 py-2.5">
+                            <span className="text-[10px] text-gray-400 whitespace-nowrap">
+                              {doc.fecha_recibido ? formatDate(doc.fecha_recibido) : doc.creado_en ? formatDate(doc.creado_en) : '—'}
+                            </span>
+                          </td>
+                          {/* No. Oficio */}
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-1.5">
                               <PrioridadBadge prioridad={doc.prioridad} />
@@ -5162,19 +5659,7 @@ export default function GestionDocumental() {
                               </span>
                             </div>
                           </td>
-                          <td className="px-3 py-2.5">
-                            <p className="text-xs font-medium text-gray-900 truncate max-w-[200px] leading-tight">{doc.asunto}</p>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <p className="text-[10px] text-gray-600 truncate max-w-[120px]">
-                              {doc.remitente_dependencia || doc.remitente_nombre || '—'}
-                            </p>
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <p className="text-[10px] text-gray-500 truncate max-w-[100px]">
-                              {doc.area_turno_nombre ? doc.area_turno_nombre.replace(/^(Departamento|Subdirección|Dirección)\s+de\s+/i, '') : '—'}
-                            </p>
-                          </td>
+                          {/* UPP */}
                           <td className="px-3 py-2.5">
                             {(() => {
                               const uppLabel = formatUpp(
@@ -5192,6 +5677,41 @@ export default function GestionDocumental() {
                               )
                             })()}
                           </td>
+                          {/* Remitente */}
+                          <td className="px-3 py-2.5">
+                            <p className="text-[10px] text-gray-600 truncate max-w-[120px]">
+                              {doc.remitente_dependencia || doc.remitente_nombre || '—'}
+                            </p>
+                          </td>
+                          {/* Asunto */}
+                          <td className="px-3 py-2.5">
+                            <p className="text-xs font-medium text-gray-900 truncate max-w-[200px] leading-tight">{doc.asunto}</p>
+                          </td>
+                          {/* Área */}
+                          <td className="px-3 py-2.5">
+                            <p className="text-[10px] text-gray-500 truncate max-w-[100px]">
+                              {doc.area_turno_nombre ? doc.area_turno_nombre.replace(/^(Departamento|Subdirección|Dirección)\s+de\s+/i, '') : '—'}
+                            </p>
+                          </td>
+                          {/* Atención */}
+                          <td className="px-3 py-2.5">
+                            <SemaforoAtencion fecha={doc.fecha_limite} estado={doc.estado} />
+                          </td>
+                          {/* V°B° Subdirector */}
+                          <td className="px-3 py-2.5 text-center">
+                            {doc.visto_bueno_subdirector ? (
+                              <span className="inline-flex items-center justify-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200 whitespace-nowrap" title="Visto bueno del Subdirector registrado">
+                                <CheckCircle2 size={12} /> V°B°
+                              </span>
+                            ) : doc.estado === 'respondido' && doc.has_borrador ? (
+                              <span className="inline-flex items-center justify-center text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap" title="Pendiente V°B° del Subdirector">
+                                Pendiente
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-300">—</span>
+                            )}
+                          </td>
+                          {/* Estado */}
                           <td className="px-3 py-2.5 text-center">
                             <div className="flex items-center justify-center">
                               {cfg && (
@@ -5203,57 +5723,44 @@ export default function GestionDocumental() {
                               )}
                             </div>
                           </td>
-                          {/* Columna V°B° del Subdirector: check verde si validó, guion cuando
-                              no aplica (doc todavía sin borrador o ya firmado), o círculo
-                              vacío cuando el subdirector aún debe marcar su V°B°. */}
-                          <td className="px-3 py-2.5 text-center">
-                            {doc.visto_bueno_subdirector ? (
-                              <span className="inline-flex items-center justify-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-medium bg-green-50 text-green-700 border border-green-200 whitespace-nowrap" title="Visto bueno del Subdirector registrado">
-                                <CheckCircle2 size={12} /> V°B°
-                              </span>
-                            ) : ['respondido', 'en_atencion'].includes(doc.estado) && doc.has_borrador ? (
-                              <span className="inline-flex items-center justify-center text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap" title="Pendiente V°B° del Subdirector">
-                                Pendiente
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-gray-300">—</span>
-                            )}
+                          <td className="px-2 py-2">
+                            <div className="flex items-center justify-center gap-1">
+                              {/* Visualizar — abre panel flotante en tab Turnar */}
+                              {canVerVisorFlotante && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setFloatingDocTab('info'); setFloatingActiveTab('info'); setFloatingDocId(doc.id) }}
+                                className="inline-flex items-center justify-center w-6 h-6 rounded text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-colors"
+                                title="Visualizar documento">
+                                <Eye size={11} />
+                              </button>
+                              )}
+                              {/* Editar (solo quien tenga permiso de eliminar/modificar registro base) */}
+                              {canMain('eliminar') && !doc.firmado_digitalmente && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setEditDocId(doc.id) }}
+                                  className="inline-flex items-center justify-center w-6 h-6 rounded text-blue-600 hover:bg-blue-50 border border-blue-200 transition-colors"
+                                  title="Modificar registro">
+                                  <Edit3 size={11} />
+                                </button>
+                              )}
+                              {/* Separador + Eliminar */}
+                              {canMain('eliminar') && !doc.firmado_digitalmente && (
+                                <>
+                                  <span className="w-px h-4 bg-gray-200 mx-1" />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      if (window.confirm(`¿Eliminar "${doc.asunto}"? Esta acción no se puede deshacer.`))
+                                        deleteMutation.mutate(doc.id)
+                                    }}
+                                    className="inline-flex items-center justify-center w-6 h-6 rounded text-red-500 hover:bg-red-50 border border-red-200 transition-colors"
+                                    title="Eliminar documento">
+                                    <Trash2 size={11} />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
-                          <td className="px-3 py-2.5">
-                            <SemaforoAtencion fecha={doc.fecha_limite} estado={doc.estado} />
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <span className="text-[10px] text-gray-400 whitespace-nowrap">
-                              {doc.fecha_recibido ? formatDate(doc.fecha_recibido) : doc.creado_en ? formatDate(doc.creado_en) : '—'}
-                            </span>
-                          </td>
-                          {(user?.rol === 'secretaria' || user?.rol === 'superadmin') && (
-                            <td className="px-3 py-2.5 text-center">
-                              <div className="flex items-center justify-center gap-1">
-                                {!doc.firmado_digitalmente && (
-                                  <>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setEditDocId(doc.id) }}
-                                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 rounded font-medium text-blue-600 hover:bg-blue-50 border border-blue-200 transition-colors"
-                                      title="Modificar registro">
-                                      <Edit3 size={10} />
-                                    </button>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        if (window.confirm(`¿Eliminar "${doc.asunto}"? Esta acción no se puede deshacer.`))
-                                          deleteMutation.mutate(doc.id)
-                                      }}
-                                      className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-1 rounded font-medium text-red-600 hover:bg-red-50 border border-red-200 transition-colors"
-                                      title="Eliminar documento">
-                                      <Trash2 size={10} />
-                                    </button>
-                                  </>
-                                )}
-                                {doc.firmado_digitalmente && <span className="text-[9px] text-gray-300">—</span>}
-                              </div>
-                            </td>
-                          )}
                         </tr>
                       )
                     })}
@@ -5458,26 +5965,71 @@ export default function GestionDocumental() {
         </>)}
       </div>
 
-      {/* ── Panel detalle (full-width cuando hay selección) ────────────────── */}
-      {selectedId && selectedDoc && (
+      {/* ── Panel detalle (full-width cuando hay selección) — solo para emitidos ── */}
+      {selectedId && selectedDoc && selectedDoc.flujo !== 'recibido' && (
         <div className="flex-1 flex flex-col min-w-0">
-          {selectedDoc.flujo === 'recibido' ? (
-            <PanelRecibido
-              doc={selectedDoc}
-              areas={areas}
-              onClose={() => setSelectedId(null)}
-              onRefetch={refetch}
-              onDelete={() => { if (window.confirm('¿Eliminar este documento? Esta acción no se puede deshacer.')) deleteMutation.mutate(selectedDoc.id) }}
-            />
-          ) : (
-            <PanelEmitido
-              doc={selectedDoc}
-              areas={areas}
-              onClose={() => setSelectedId(null)}
-              onRefetch={refetch}
-              onDelete={() => { if (window.confirm('¿Eliminar este documento?')) deleteMutation.mutate(selectedDoc.id) }}
-            />
-          )}
+          <PanelEmitido
+            doc={selectedDoc}
+            areas={areas}
+            onClose={() => setSelectedId(null)}
+            onRefetch={refetch}
+            onDelete={() => { if (window.confirm('¿Eliminar este documento?')) deleteMutation.mutate(selectedDoc.id) }}
+          />
+        </div>
+      )}
+
+      {/* ── Floating viewer: Turnar / Respuesta / Historial ─────────────────── */}
+      {floatingDocId && floatingDoc && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="flex overflow-hidden rounded-2xl shadow-2xl bg-white" style={{ width: '92vw', height: '92vh' }}>
+            {/* Izquierda: Panel con tabs de acciones */}
+            <div className="w-[52%] flex flex-col overflow-hidden border-r border-gray-200 rounded-l-2xl">
+              <PanelRecibido
+                doc={floatingDoc}
+                areas={areas}
+                onClose={() => { setFloatingDocId(null); setFloatingPdfUrl(null) }}
+                onRefetch={refetch}
+                initialTab={floatingDocTab}
+                hideDocumentVisor={true}
+                onTabChange={handleFloatingTabChange}
+              />
+            </div>
+            {/* Derecha: Vista previa — recibido (Turnar) o respuesta (Respuesta) */}
+            <div className="w-[48%] flex flex-col bg-gray-50 rounded-r-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-white flex items-center gap-2 flex-shrink-0">
+                <FileText size={14} className="text-gray-400 flex-shrink-0" />
+                <span className="text-xs font-medium text-gray-700 truncate flex-1">
+                  {floatingActiveTab === 'ocr'
+                    ? `Respuesta — ${floatingDoc.asunto}`
+                    : floatingDoc.numero_oficio_origen
+                      ? `${floatingDoc.numero_oficio_origen} — ${floatingDoc.asunto}`
+                      : floatingDoc.asunto}
+                </span>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {floatingPdfLoading ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-400">
+                    <RotateCcw size={28} className="animate-spin" />
+                    <p className="text-xs">Cargando documento...</p>
+                  </div>
+                ) : floatingPdfUrl ? (
+                  <iframe
+                    src={floatingPdfUrl}
+                    title="Vista previa"
+                    className="w-full h-full"
+                    style={{ border: 'none' }}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-300">
+                    <FileText size={40} />
+                    <p className="text-xs text-gray-400">
+                      {floatingActiveTab === 'ocr' ? 'Genera el oficio de respuesta para visualizarlo aquí' : 'Sin documento adjunto'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -5492,7 +6044,7 @@ export default function GestionDocumental() {
       {showModalRecibido && (
         <ModalRegistrarRecibido
           onClose={() => setShowModalRecibido(false)}
-          onCreated={doc => { setShowModalRecibido(false); setSelectedId(doc.id) }}
+          onCreated={doc => { setShowModalRecibido(false); setFloatingDocTab('info'); setFloatingActiveTab('info'); setFloatingDocId(doc.id) }}
         />
       )}
       {showModalEmitido && (

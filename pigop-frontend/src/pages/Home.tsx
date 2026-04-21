@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { loadPermissionOverrides } from '../utils/rolePermissions'
+import { usePermissionsVersion } from '../hooks/usePermissionsVersion'
 import { useQuery } from '@tanstack/react-query'
 import {
   ShieldCheck, FolderOpen, Stamp,
@@ -112,6 +114,7 @@ function formatDateShort(dateStr: string): string {
 export default function Home() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const permissionsVersion = usePermissionsVersion()
 
   const isDirector = user?.rol === 'admin_cliente'
   const isSecretaria = user?.rol === 'secretaria'
@@ -125,24 +128,36 @@ export default function Home() {
     secretaria:    ['gestion_documental'],
     asesor:        ['gestion_documental'],
     subdirector:   ['gestion_documental'],
-    jefe_depto:    ['gestion_documental', 'validacion_depp'],
+    jefe_depto:    ['gestion_documental'],
     analista:      ['gestion_documental'],
     auditor:       ['gestion_documental'],
     consulta:      ['gestion_documental'],
   }
-  const userModules = useMemo(() => {
-    if (!user) return []
+  // Calcula acceso real de un módulo para el usuario actual
+  const moduleAccess = useMemo(() => {
+    if (!user) return { accessible: [] as typeof ALL_MODULES, blocked: [] as typeof ALL_MODULES }
+    const overrides = loadPermissionOverrides()
     const permitidos = MODULOS_POR_ROL[user.rol] || []
-    return ALL_MODULES.filter(mod => {
-      if (!mod.active) return false
-      if (canBypass) return true
-      // Revisar modulos_acceso: "todos" da acceso a todo, si no, verificar por rol
+    const accessible: typeof ALL_MODULES = []
+    const blocked: typeof ALL_MODULES = []
+    ALL_MODULES.filter(m => m.active).forEach(mod => {
+      if (canBypass) { accessible.push(mod); return }
+      const overrideKey = `mod_${mod.id}.${user.rol}`
+      if (overrideKey in overrides) {
+        overrides[overrideKey] ? accessible.push(mod) : blocked.push(mod)
+        return
+      }
       const acceso = user.modulos_acceso || []
-      if (acceso.includes('todos')) return permitidos.includes(mod.id)
-      if (acceso.length > 0) return acceso.includes(mod.id)
-      return permitidos.includes(mod.id)
+      const allowed = acceso.includes('todos')
+        ? permitidos.includes(mod.id)
+        : acceso.length > 0 ? acceso.includes(mod.id) : permitidos.includes(mod.id)
+      allowed ? accessible.push(mod) : blocked.push(mod)
     })
-  }, [user, canBypass])
+    return { accessible, blocked }
+  }, [user, canBypass, permissionsVersion])
+
+  const userModules    = moduleAccess.accessible
+  const blockedModules = moduleAccess.blocked
 
   // Siempre mostrar dashboard con saludo — no redirigir automáticamente
   useEffect(() => {
@@ -548,6 +563,27 @@ export default function Home() {
                 Acceder al módulo <ArrowRight size={13} />
               </div>
             </button>
+          ))}
+
+          {/* Módulos bloqueados por permisos */}
+          {blockedModules.map(mod => (
+            <div
+              key={mod.id}
+              className="relative flex flex-col p-5 bg-white rounded-xl border border-gray-200"
+            >
+              <span className="absolute top-3 right-3 inline-flex items-center gap-1 text-[10px] font-semibold text-gray-500 bg-gray-100 border border-gray-200 px-2 py-0.5 rounded-full">
+                <Clock size={9} /> Próximamente
+              </span>
+              <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 bg-gray-100 mb-4">
+                <mod.icon size={24} className="text-gray-400" />
+              </div>
+              <h3 className="text-base font-bold text-gray-500">{mod.label}</h3>
+              <p className="text-[10px] font-semibold text-gray-300 uppercase tracking-wider mt-0.5">
+                {mod.subtitle}
+              </p>
+              <p className="text-xs text-gray-400 mt-2 flex-1">{mod.description}</p>
+              <p className="text-xs text-gray-400 mt-4 font-medium">Módulo en desarrollo</p>
+            </div>
           ))}
 
           {/* Módulos próximamente */}

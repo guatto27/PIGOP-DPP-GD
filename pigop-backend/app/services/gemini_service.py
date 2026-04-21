@@ -448,21 +448,42 @@ class GeminiService:
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _parse_json_response(self, text: str) -> dict:
-        """Extrae y parsea JSON de la respuesta de Gemini (maneja markdown)."""
-        # Remover bloques ```json ... ```
+        """Extrae y parsea JSON de la respuesta de Gemini (maneja markdown y thinking)."""
+        if not text:
+            return {}
+
+        # 1. Eliminar bloques de "thinking" de modelos como gemini-2.5-flash
+        text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<thought>.*?</thought>",   "", text, flags=re.DOTALL | re.IGNORECASE)
+
+        # 2. Remover bloques ```json ... ``` o ``` ... ```
         text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`").strip()
+
+        # 3. Intento directo
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Intentar encontrar el primer objeto JSON en el texto
-            match = re.search(r"\{.*\}", text, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group())
-                except Exception:
-                    pass
-            logger.warning(f"No se pudo parsear JSON de Gemini: {text[:200]}")
-            return {"raw_response": text}
+            pass
+
+        # 4. Buscar el bloque JSON más externo (desde el primer { hasta el último })
+        start = text.find("{")
+        end   = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except Exception:
+                pass
+
+        # 5. Fallback: búsqueda greedy con regex
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except Exception:
+                pass
+
+        logger.warning(f"No se pudo parsear JSON de Gemini: {text[:300]}")
+        return {"raw_response": text}
 
     # ── Mocks para cuando Gemini no está disponible ────────────────────────────
 

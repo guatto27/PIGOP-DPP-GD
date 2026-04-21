@@ -122,8 +122,8 @@ async def validar_certificado(
     current_user: Usuario = Depends(get_current_active_user),
 ):
     """Valida un certificado de firma electrónica. Solo admin/superadmin."""
-    if current_user.rol not in ("admin_cliente", "superadmin"):
-        raise ForbiddenError("Solo admin o superadmin pueden usar firma por lote.")
+    if current_user.rol != "admin_cliente":
+        raise ForbiddenError("Solo el Director puede usar firma por lote.")
 
     cer_bytes = await cer_file.read()
     key_bytes = await key_file.read()
@@ -156,8 +156,8 @@ async def crear_lote_firma(
     Crea un lote de firma con los documentos seleccionados.
     Valida que todos estén en un estado válido para firma y tengan borrador.
     """
-    if current_user.rol not in ("admin_cliente", "superadmin"):
-        raise ForbiddenError("Solo admin o superadmin pueden crear lotes de firma.")
+    if current_user.rol != "admin_cliente":
+        raise ForbiddenError("Solo el Director puede crear lotes de firma.")
 
     # Estados válidos: recibidos (en_atencion, respondido), emitidos (borrador, en_revision)
     estados_firmables = ("en_atencion", "respondido", "borrador", "en_revision")
@@ -240,8 +240,8 @@ async def ejecutar_firma_lote(
     Se abre una sesión segura de 5 minutos para firmar todos los docs.
     La sesión se cierra automáticamente al finalizar.
     """
-    if current_user.rol not in ("admin_cliente", "superadmin"):
-        raise ForbiddenError("Solo admin o superadmin pueden ejecutar firma por lote.")
+    if current_user.rol != "admin_cliente":
+        raise ForbiddenError("Solo el Director puede ejecutar firma por lote.")
 
     lote = await _load_lote(db, lote_id)
     if not lote:

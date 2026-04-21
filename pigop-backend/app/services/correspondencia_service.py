@@ -864,14 +864,44 @@ class CorrespondenciaService:
     Combina reglas deterministas con Gemini AI para OCR y redacción.
     """
 
+    # ── Extracción de texto Word (docx) ───────────────────────────────────────
+
+    def _extraer_texto_word(self, file_bytes: bytes) -> str:
+        """Extrae texto plano de un archivo .docx usando python-docx."""
+        try:
+            import io
+            import docx
+            doc_word = docx.Document(io.BytesIO(file_bytes))
+            parts = []
+            for element in doc_word.element.body:
+                if element.tag.endswith('}p'):
+                    from docx.oxml.ns import qn
+                    texts = [node.text or "" for node in element.iter(qn('w:t'))]
+                    line = "".join(texts).strip()
+                    if line:
+                        parts.append(line)
+                elif element.tag.endswith('}tbl'):
+                    from docx.table import Table as DocxTable
+                    table = DocxTable(element, doc_word)
+                    for row in table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        parts.append(" | ".join(cells))
+            return "\n".join(parts)
+        except ImportError:
+            logger.warning("[OCR-WORD] python-docx no instalado. Instala: pip install python-docx")
+            return ""
+        except Exception as e:
+            logger.error(f"[OCR-WORD] Error al leer .docx: {e}")
+            return ""
+
     async def procesar_oficio_escaneado(
         self,
         image_bytes: bytes,
         mime_type: str,
     ) -> dict:
         """
-        Procesa un oficio escaneado/fotografiado:
-          1. OCR via Gemini Vision
+        Procesa un oficio (PDF, imagen o Word):
+          1. OCR / extracción de texto según formato
           2. Clasificación automática
           3. Cálculo de fecha límite
 
@@ -879,24 +909,76 @@ class CorrespondenciaService:
         """
         from app.services.gemini_service import gemini_service
 
+        # ── Tipos soportados nativamente por Gemini Vision ────────────────────
+        _MIME_VISION = {
+            "application/pdf",
+            "image/jpeg", "image/jpg", "image/png",
+            "image/tiff", "image/webp", "image/gif",
+        }
+        # ── Tipos Word: extraer texto y enviar como texto ─────────────────────
+        _MIME_WORD = {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+        }
+
         datos: dict = {}
         if gemini_service.available:
             try:
-                from google.genai import types
                 from app.core.config import settings
                 from google import genai
 
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
-                resp = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                        _PROMPT_OCR_OFICIO,
-                    ],
-                )
-                datos = gemini_service._parse_json_response(resp.text)
+                mime_norm = (mime_type or "").lower().split(";")[0].strip()
+
+                if mime_norm in _MIME_WORD:
+                    # ── Ruta Word: extraer texto → Gemini texto ────────────────
+                    logger.info(f"[OCR] Archivo Word detectado ({mime_norm}), extrayendo texto con python-docx...")
+                    texto_word = self._extraer_texto_word(image_bytes)
+                    if not texto_word.strip():
+                        logger.warning("[OCR] No se pudo extraer texto del archivo Word.")
+                        datos = {"error": "No se pudo leer el texto del archivo Word.", "_mock": True}
+                    else:
+                        logger.info(f"[OCR] Texto Word extraído ({len(texto_word)} chars). Enviando a Gemini texto...")
+                        prompt_texto = (
+                            f"{_PROMPT_OCR_OFICIO}\n\n"
+                            f"=== TEXTO DEL DOCUMENTO ===\n{texto_word[:8000]}"
+                        )
+                        resp = client.models.generate_content(
+                            model="gemini-2.5-flash",
+                            contents=[prompt_texto],
+                        )
+                        raw_text = resp.text or ""
+                        logger.info(f"[OCR-WORD] Respuesta Gemini (primeros 500 chars): {raw_text[:500]}")
+                        datos = gemini_service._parse_json_response(raw_text)
+                        if not datos or datos.get("raw_response") or datos.get("error"):
+                            logger.warning(f"[OCR-WORD] Parseo fallido. raw_text:\n{raw_text[:2000]}")
+                        else:
+                            logger.info(f"[OCR-WORD] Campos extraídos: {list(datos.keys())}")
+
+                elif mime_norm in _MIME_VISION:
+                    # ── Ruta Vision: PDF / imagen → Gemini Vision ─────────────
+                    from google.genai import types
+                    resp = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[
+                            types.Part.from_bytes(data=image_bytes, mime_type=mime_norm),
+                            _PROMPT_OCR_OFICIO,
+                        ],
+                    )
+                    raw_text = resp.text or ""
+                    logger.info(f"[OCR] Respuesta Gemini Vision (primeros 500 chars): {raw_text[:500]}")
+                    datos = gemini_service._parse_json_response(raw_text)
+                    if not datos or datos.get("raw_response") or datos.get("error"):
+                        logger.warning(f"[OCR] Parseo fallido o vacío. raw_text completo:\n{raw_text[:2000]}")
+                    else:
+                        logger.info(f"[OCR] Campos extraídos: {list(datos.keys())}")
+
+                else:
+                    logger.warning(f"[OCR] Tipo de archivo no soportado para extracción IA: {mime_norm}")
+                    datos = {"error": f"Tipo de archivo no soportado para extracción IA: {mime_norm}", "_mock": True}
+
             except Exception as e:
-                logger.error(f"Error OCR Gemini Vision: {e}")
+                logger.error(f"[OCR] Error Gemini: {type(e).__name__}: {e}", exc_info=True)
                 datos = {"error": str(e), "_mock": True}
         else:
             datos = {

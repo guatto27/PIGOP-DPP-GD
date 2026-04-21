@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
+import { loadPermissionOverrides } from './utils/rolePermissions'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
@@ -63,9 +64,18 @@ function RevisionDocumentalRoute({ children }: { children: React.ReactNode }) {
 
   if (!user) return <Navigate to="/login" replace />
   const isAdmin = user.rol === 'superadmin' || user.rol === 'admin_cliente'
+  if (isAdmin) return <>{children}</>
+  // Verificar override de AdminPermisos (localStorage)
+  const overrides = loadPermissionOverrides()
+  const overrideKey = `mod_validacion_depp.${user.rol}`
+  if (overrideKey in overrides) {
+    if (!overrides[overrideKey]) return <Navigate to="/" replace />
+    return <>{children}</>
+  }
+  // Fallback: modulos_acceso original
   const acceso = user.modulos_acceso || []
   const hasAcceso = acceso.includes('validacion_depp') || acceso.includes('todos')
-  if (!isAdmin && !hasAcceso) return <Navigate to="/" replace />
+  if (!hasAcceso) return <Navigate to="/" replace />
   return <>{children}</>
 }
 

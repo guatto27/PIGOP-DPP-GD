@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   ShieldCheck, FolderOpen, Stamp, ClipboardList,
   LogOut, User, ChevronDown, Lock, Home,
-  FileSpreadsheet, Inbox, Settings, Menu, X, ScanSearch,
+  FileSpreadsheet, Inbox, Settings, Menu, X, ScanSearch, ArrowLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '../hooks/useAuth'
@@ -40,7 +40,8 @@ const NAV_MODULES: NavModule[] = [
     to: '/depps',
     match: (path: string) =>
       path.startsWith('/depps') || path.startsWith('/gasto') ||
-      path.startsWith('/sap-import') || path.startsWith('/bandejas'),
+      path.startsWith('/sap-import') || path.startsWith('/bandejas') ||
+      path.startsWith('/revision-documental'),
     active: true,
     adminOnly: false,
     moduleId: 'validacion_depp',
@@ -159,22 +160,23 @@ function UserDropdown({ user, onLogout }: { user: { nombre_completo?: string; em
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-white/10 transition-colors"
       >
-        <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
-             style={{ backgroundColor: GUINDA }}>
-          <User size={13} className="text-white" />
+        <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+             style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
+          <User size={14} className="text-white" />
         </div>
-        <span className="text-white text-xs font-medium hidden sm:block max-w-[140px] truncate">
-          {user?.nombre_completo ?? 'Usuario'}
-        </span>
+        <div className="hidden lg:block text-left leading-none">
+          <p className="text-white text-[11px] font-medium leading-tight max-w-[160px] truncate">
+            {user?.nombre_completo ?? 'Usuario'}
+          </p>
+          <p className="text-white/45 text-[9px] leading-tight max-w-[160px] truncate mt-0.5">
+            {user?.email}
+          </p>
+        </div>
         <ChevronDown size={12} className={clsx('text-white/60 transition-transform', open && 'rotate-180')} />
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1.5 w-56 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
-          <div className="px-3.5 py-2.5 border-b border-gray-100">
-            <p className="text-xs font-semibold text-gray-800 truncate">{user?.nombre_completo ?? 'Usuario'}</p>
-            <p className="text-[10px] text-gray-400 truncate">{user?.email}</p>
-          </div>
+        <div className="absolute right-0 mt-1.5 w-44 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50">
           <button
             onClick={() => { setOpen(false); onLogout() }}
             className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-gray-600 hover:bg-gray-50 hover:text-red-600 transition-colors"
@@ -305,6 +307,13 @@ export default function Layout() {
     navigate('/login')
   }
 
+  // Volver: solo en sub-páginas con ruta padre dentro del mismo módulo (ej. /depps/123 → /depps)
+  const parentPath = (() => {
+    const parts = location.pathname.split('/').filter(Boolean)
+    return parts.length >= 2 ? '/' + parts.slice(0, -1).join('/') : null
+  })()
+
+
   // Cerrar menu movil al navegar
   useEffect(() => {
     setMobileMenuOpen(false)
@@ -312,12 +321,13 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-100">
-      {/* ── Barra superior institucional ────────────────────────────────────── */}
-      <header className="flex-shrink-0 shadow-md z-30" style={{ backgroundColor: GUINDA_DARK }}>
-        {/* Fila superior: Logo + branding + API + Admin + usuario */}
-        <div className="flex items-center justify-between px-4 lg:px-6 h-12">
-          {/* Izquierda: Hamburguesa (movil) + Logo + Nombre */}
-          <div className="flex items-center gap-3">
+      {/* ── Barra superior institucional (fila única) ────────────────────────── */}
+      <header className="flex-shrink-0 shadow-md z-30 sticky top-0" style={{ backgroundColor: GUINDA_DARK }}>
+        <div className="grid items-center px-4 lg:px-6 h-[62px] gap-2" style={{ gridTemplateColumns: 'auto 1fr auto' }}>
+
+          {/* ── Izquierda: Logo + Branding ─────────────────────────────────── */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {/* Hamburguesa móvil */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="lg:hidden text-white/80 hover:text-white p-1"
@@ -328,102 +338,96 @@ export default function Layout() {
             <img
               src="https://michoacan.gob.mx/cdn/img/logo-blanco.svg"
               alt="Gobierno del Estado de Michoacán"
-              className="h-7 object-contain flex-shrink-0"
+              className="h-9 object-contain flex-shrink-0"
               onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
             />
-            <div className="hidden sm:block h-5 w-px bg-white/20" />
-            <Link to="/" className="hidden sm:block hover:opacity-80 transition-opacity">
-              <p className="text-white text-[10px] font-bold leading-tight tracking-wide">
-                PIGOP
+            <div className="hidden sm:block h-8 w-px bg-white/20" />
+            <Link to="/" className="hidden sm:block hover:opacity-80 transition-opacity leading-none">
+              <p className="text-white text-[11px] leading-tight">
+                SISTEMA INTEGRAL <strong>PIGOP</strong>
               </p>
-              <p className="text-white/50 text-[9px] leading-tight">
-                Secretaría de Finanzas
-              </p>
+              <p className="text-white/55 text-[9px] leading-tight mt-0.5">Secretaría de Finanzas y Administración</p>
+              <p className="text-white/40 text-[9px] leading-tight">Dirección de Programación y Presupuesto</p>
             </Link>
           </div>
 
-          {/* Centro: API status */}
-          <div className="hidden md:flex items-center">
-            <span className="inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" />
-              API conectada
-            </span>
-          </div>
-
-          {/* Derecha: Admin + Usuario */}
-          <div className="flex items-center gap-2">
-            {isAdmin && (
-              <Link
-                to="/admin"
-                className={clsx(
-                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-all text-sm font-medium',
-                  location.pathname.startsWith('/admin')
-                    ? 'bg-white/20 text-white'
-                    : 'text-white/70 hover:bg-white/10 hover:text-white'
-                )}
-              >
-                <Settings size={14} />
-                <span className="hidden sm:inline">Admin</span>
-              </Link>
+          {/* ── Centro: Navegación desktop — solo Inicio + módulo activo ──────── */}
+          <nav className="hidden lg:flex items-center gap-1 justify-start min-w-0">
+            {/* Volver (solo sub-páginas como /depps/123 → /depps) */}
+            {parentPath && (
+              <>
+                <button
+                  onClick={() => navigate(parentPath)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all whitespace-nowrap text-sm font-medium text-white/70 hover:bg-white/10 hover:text-white"
+                >
+                  <ArrowLeft size={14} />
+                  <span>Volver</span>
+                </button>
+                <div className="h-4 w-px bg-white/15 mx-0.5" />
+              </>
             )}
+            {/* Inicio */}
+            <Link
+              to="/"
+              className={clsx(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all whitespace-nowrap text-sm font-medium',
+                location.pathname === '/'
+                  ? 'bg-white/20 text-white'
+                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+              )}
+            >
+              <Home size={15} />
+              <span>Inicio</span>
+            </Link>
+            {/* Solo el módulo activo */}
+            {(() => {
+              const activeMod = visibleModules.find(mod => mod.match(location.pathname))
+              if (!activeMod || location.pathname === '/') return null
+              return (
+                <>
+                  <div className="h-4 w-px bg-white/15 mx-0.5" />
+                  {activeMod.submodules && activeMod.submodules.length > 0
+                    ? <ModuleDropdown mod={activeMod} pathname={location.pathname} />
+                    : (
+                      <Link
+                        to={activeMod.to!}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/20 text-white whitespace-nowrap text-sm font-medium"
+                      >
+                        <activeMod.icon size={15} />
+                        <span>{activeMod.label}</span>
+                      </Link>
+                    )
+                  }
+                </>
+              )
+            })()}
+          </nav>
+
+          {/* ── Derecha: Usuario (dropdown) + Admin ───────────────────────── */}
+          <div className="flex items-center gap-2 justify-end">
+            {/* Panel Admin */}
+            {isAdmin && (
+              <>
+                <Link
+                  to="/admin"
+                  className={clsx(
+                    'hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-md transition-all text-sm font-medium whitespace-nowrap',
+                    location.pathname.startsWith('/admin')
+                      ? 'bg-white/20 text-white'
+                      : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  )}
+                >
+                  <Settings size={14} />
+                  <span>Panel Admin</span>
+                </Link>
+                <div className="hidden lg:block h-6 w-px bg-white/20" />
+              </>
+            )}
+            {/* Dropdown de usuario (todos los tamaños) */}
             <UserDropdown user={user} onLogout={handleLogout} />
           </div>
-        </div>
 
-        {/* Fila de navegacion — desktop: Home + 4 módulos principales */}
-        <nav className="hidden lg:flex items-center gap-1 px-4 lg:px-6 pb-1.5 overflow-visible">
-          <Link
-            to="/"
-            className={clsx(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all whitespace-nowrap text-sm font-medium',
-              location.pathname === '/'
-                ? 'bg-white/20 text-white'
-                : 'text-white/70 hover:bg-white/10 hover:text-white'
-            )}
-          >
-            <Home size={15} />
-            <span>Inicio</span>
-          </Link>
-          <div className="h-4 w-px bg-white/15 mx-1" />
-          {visibleModules.map(mod => {
-            // Módulo con submódulos → dropdown
-            if (mod.submodules && mod.submodules.length > 0) {
-              return <ModuleDropdown key={mod.label} mod={mod} pathname={location.pathname} />
-            }
-            // Módulo inactivo (próximamente)
-            if (!mod.active) {
-              return (
-                <div
-                  key={mod.label}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md cursor-not-allowed opacity-40"
-                  title="Próximamente"
-                >
-                  <mod.icon size={15} className="text-white/50" />
-                  <span className="text-sm font-medium text-white/50 whitespace-nowrap">{mod.label}</span>
-                  <Lock size={10} className="text-white/30" />
-                </div>
-              )
-            }
-            // Módulo activo sin submódulos → enlace directo
-            const isActive = mod.match(location.pathname)
-            return (
-              <Link
-                key={mod.label}
-                to={mod.to!}
-                className={clsx(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all whitespace-nowrap text-sm font-medium',
-                  isActive
-                    ? 'bg-white/20 text-white'
-                    : 'text-white/70 hover:bg-white/10 hover:text-white'
-                )}
-              >
-                <mod.icon size={15} />
-                <span>{mod.label}</span>
-              </Link>
-            )
-          })}
-        </nav>
+        </div>
       </header>
 
       {/* ── Menu movil overlay ─────────────────────────────────────────────── */}
@@ -551,22 +555,6 @@ export default function Layout() {
           </div>
         </>
       )}
-
-      {/* ── Page header breadcrumb ─────────────────────────────────────────── */}
-      <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 lg:px-6 py-2.5 shadow-sm">
-        <div className="max-w-screen-2xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-sm font-bold text-gray-900">{meta.title}</h1>
-            <p className="text-[11px] text-gray-500 mt-0.5 hidden sm:block">{meta.subtitle}</p>
-          </div>
-          <img
-            src="https://michoacan.gob.mx/cdn/img/logo.svg"
-            alt="Michoacan"
-            className="h-5 object-contain opacity-40 hidden sm:block"
-            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-          />
-        </div>
-      </div>
 
       {/* ── Contenido principal ────────────────────────────────────────────── */}
       <main className="flex-1 overflow-auto">

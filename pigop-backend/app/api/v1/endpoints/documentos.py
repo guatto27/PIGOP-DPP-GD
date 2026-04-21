@@ -304,6 +304,33 @@ async def siguiente_folio(
     return {"folio": folio, "numero": next_num, "tipo": tipo_upper, "anio": anio}
 
 
+# ---------- Verificar disponibilidad de folio --------------------------------
+
+@router.get("/verificar-folio", summary="Verificar si un folio/No. de oficio ya existe")
+async def verificar_folio(
+    folio: str = Query(..., description="Folio a verificar, ej: SFA/SF/DPP-SCEG/0001/2026"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_active_user),
+):
+    """
+    Verifica si un número de oficio/folio ya está registrado en el sistema.
+    Retorna { disponible: true } si el folio está libre, { disponible: false, documento_id } si ya existe.
+    """
+    from sqlalchemy import text as sql_text
+    folio_limpio = folio.strip()
+    result = await db.execute(
+        sql_text(
+            "SELECT id FROM documentos_oficiales "
+            "WHERE folio_respuesta = :f OR numero_control = :f LIMIT 1"
+        ),
+        {"f": folio_limpio},
+    )
+    row = result.first()
+    if row:
+        return {"disponible": False, "documento_id": str(row[0]), "folio": folio_limpio}
+    return {"disponible": True, "folio": folio_limpio}
+
+
 # ---------- Catalogo de areas ------------------------------------------------
 
 @router.get("/areas", summary="Catalogo de areas DPP para turno")
@@ -1040,45 +1067,52 @@ async def acusar_despacho_lote(
 @router.post(
     "/{doc_id}/visto-bueno",
     response_model=DocumentoResponse,
-    summary="Subdirector registra visto bueno (check de revisión previo a firma)",
+    summary="Subdirector registra visto bueno",
 )
 async def registrar_visto_bueno(
     doc_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(get_current_active_user),
 ):
-    """
-    El Subdirector marca que revisó el documento antes de que el Director firme.
-    Es un control de revisión visible en el monitor — NO bloquea la firma.
-    """
     if current_user.rol not in ("subdirector", "admin_cliente", "superadmin"):
         raise ForbiddenError("Solo Subdirectores, Director o superadmin pueden dar visto bueno.")
 
     doc = await crud_documento.get(db, doc_id)
     if not doc:
         raise NotFoundError("Documento no encontrado.")
+    
+    _assert_acceso(current_user, str(doc.cliente_id))
 
     from datetime import datetime, timezone
-    updated = await crud_documento.update(db, db_obj=doc, obj_in={
-        "visto_bueno_subdirector": True,
-        "visto_bueno_subdirector_id": str(current_user.id),
-        "visto_bueno_subdirector_en": datetime.now(timezone.utc),
-    })
+    from app.models.documento import HistorialDocumento
+    try:
+        to_upd = {"visto_bueno_subdirector": True}
+        if hasattr(doc, 'visto_bueno_subdirector_id'):
+            to_upd["visto_bueno_subdirector_id"] = str(current_user.id)
+        if hasattr(doc, 'visto_bueno_subdirector_en'):
+            to_upd["visto_bueno_subdirector_en"] = datetime.now(timezone.utc)
+            
+        await crud_documento.update(db, db_obj=doc, obj_in=to_upd)
 
-    # Registrar en historial
-    historial = HistorialDocumento(
-        documento_id=doc.id,
-        usuario_id=str(current_user.id),
-        tipo_accion="visto_bueno",
-        estado_anterior=doc.estado,
-        estado_nuevo=doc.estado,  # no cambia estado
-        observaciones=f"Visto bueno registrado por {current_user.nombre_completo}",
-        version=doc.version or 1,
-    )
-    db.add(historial)
-    await db.commit()
+        try:
+            historial = HistorialDocumento(
+                documento_id=doc.id,
+                usuario_id=str(current_user.id),
+                tipo_accion="visto_bueno",
+                estado_anterior=doc.estado,
+                estado_nuevo=doc.estado,
+                observaciones=f"Visto Bueno registrado por {current_user.nombre_completo or current_user.email}",
+                version=doc.version or 1,
+            )
+            db.add(historial)
+        except:
+            pass
 
-    return await crud_documento.get_with_relations(db, updated.id)
+        await db.commit()
+        return await crud_documento.get_with_relations(db, doc_id)
+    except Exception as e:
+        await db.rollback()
+        raise BusinessError(f"Error en base de datos: {str(e)}")
 
 
 # ---------- Procesar OCR -----------------------------------------------------
@@ -1979,8 +2013,8 @@ async def devolver_documento(
     Transición: en_atencion/respondido → devuelto (recibidos)
                 en_revision → borrador (emitidos)
     """
-    if current_user.rol not in ("admin_cliente", "superadmin", "secretaria"):
-        raise ForbiddenError("Solo el Director, Secretaría o superadmin pueden devolver documentos.")
+    if current_user.rol not in ("admin_cliente", "superadmin", "subdirector"):
+        raise ForbiddenError("Solo el Director, Subdirector o superadmin pueden devolver documentos.")
 
     doc = await crud_documento.get(db, doc_id)
     if not doc:
@@ -2157,8 +2191,8 @@ async def firmar_documento(
 
     Genera firma RSA real, QR de verificación y registra en bitácora.
     """
-    if current_user.rol not in ("admin_cliente", "superadmin"):
-        raise ForbiddenError("Solo admin o superadmin pueden firmar documentos.")
+    if current_user.rol != "admin_cliente":
+        raise ForbiddenError("Solo el Director puede firmar documentos.")
 
     doc = await crud_documento.get(db, doc_id)
     if not doc:

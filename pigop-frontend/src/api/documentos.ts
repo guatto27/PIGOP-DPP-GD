@@ -653,6 +653,14 @@ export const documentosApi = {
     return res.data
   },
 
+  /** Verificar si un folio ya existe en el sistema */
+  verificarFolio: async (
+    folio: string,
+  ): Promise<{ disponible: boolean; documento_id?: string; folio: string }> => {
+    const res = await apiClient.get('/documentos/verificar-folio', { params: { folio } })
+    return res.data
+  },
+
   /** Obtener PDF del oficio como blob URL (para visor embebido) */
   obtenerOficioPdfUrl: async (id: string): Promise<string> => {
     const res = await apiClient.get(`/documentos/${id}/descargar-oficio-pdf`, {
