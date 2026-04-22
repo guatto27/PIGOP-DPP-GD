@@ -15,25 +15,39 @@ export function usePermissionsBootstrap(): void {
   const { user } = useAuth()
 
   // Carga completa: overrides + version. Se refetchea cuando changes en version lo invaliden.
+  // retry: false + error silenciado → si el backend aún no tiene el endpoint (deploy atrasado),
+  //   la app sigue funcionando con los defaults de rolePermissions.ts.
   useQuery({
     queryKey: ['permisos', 'full'],
     queryFn: async () => {
-      const res = await permisosApi.get()
-      setPermissionOverrides(res.overrides, res.version)
-      return res
+      try {
+        const res = await permisosApi.get()
+        setPermissionOverrides(res.overrides, res.version)
+        return res
+      } catch {
+        return { overrides: {}, version: 0 }
+      }
     },
     enabled: !!user,
-    staleTime: Infinity, // invalidación manual desde el polling
+    staleTime: Infinity,
     refetchOnWindowFocus: false,
+    retry: false,
   })
 
   // Polling de versión. Si cambia, re-pide overrides y actualiza cache.
   const { data: versionData } = useQuery({
     queryKey: ['permisos', 'version'],
-    queryFn: permisosApi.getVersion,
+    queryFn: async () => {
+      try {
+        return await permisosApi.getVersion()
+      } catch {
+        return null
+      }
+    },
     enabled: !!user,
     refetchInterval: POLL_INTERVAL_MS,
     refetchOnWindowFocus: true,
+    retry: false,
   })
 
   useEffect(() => {
@@ -42,6 +56,6 @@ export function usePermissionsBootstrap(): void {
     // Versión cambió → volver a leer overrides completos
     permisosApi.get().then((res) => {
       setPermissionOverrides(res.overrides, res.version)
-    }).catch(() => { /* silencioso; reintentará en el próximo poll */ })
+    }).catch(() => { /* silencioso; reintenta en el próximo poll */ })
   }, [versionData])
 }
