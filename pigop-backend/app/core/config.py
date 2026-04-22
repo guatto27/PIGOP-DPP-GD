@@ -58,6 +58,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173",
         "https://pigop.michoacan.gob.mx",
+        "https://lightskyblue-jaguar-400145.hostingersite.com",
     ]
 
     # Celery

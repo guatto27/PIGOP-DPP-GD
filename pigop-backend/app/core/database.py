@@ -1,7 +1,10 @@
+import uuid
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
+from app.core.security import get_password_hash
 
 
 def _engine_kwargs() -> dict:
@@ -47,3 +50,31 @@ async def create_tables():
     """Crea todas las tablas (solo para desarrollo, en prod usar Alembic)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def init_db_data():
+    """Siembra datos iniciales (Admin y Cliente DPP) si no existen."""
+    async with AsyncSessionLocal() as db:
+        # 1. Crear Cliente DPP
+        res = await db.execute(text("SELECT 1 FROM clientes WHERE codigo_upp='DPP'"))
+        if not res.fetchone():
+            await db.execute(text(
+                "INSERT INTO clientes (id, codigo_upp, nombre, tipo, activo, configuracion) "
+                "VALUES (:id, 'DPP', 'Dirección de Programación y Presupuesto', 'centralizada', 1, '{}')"
+            ), {"id": str(uuid.uuid4())})
+            print("✅ Cliente DPP inicializado")
+
+        # 2. Crear Superadmin
+        res = await db.execute(text("SELECT 1 FROM usuarios WHERE email=:e"), {"e": settings.SUPERADMIN_EMAIL})
+        if not res.fetchone():
+            await db.execute(text(
+                "INSERT INTO usuarios (id, email, password_hash, nombre_completo, rol, activo, modulos_acceso) "
+                "VALUES (:id, :email, :pwd, 'Administrador PIGOP', 'superadmin', 1, '[]')"
+            ), {
+                "id": str(uuid.uuid4()),
+                "email": settings.SUPERADMIN_EMAIL,
+                "pwd": get_password_hash(settings.SUPERADMIN_PASSWORD)
+            })
+            print(f"✅ Superadmin {settings.SUPERADMIN_EMAIL} inicializado")
+
+        await db.commit()

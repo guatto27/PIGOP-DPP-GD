@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import create_tables
+from app.core.database import create_tables, init_db_data
 from app.core.exceptions import PigopException
 
 # Directorio de uploads locales
@@ -50,7 +50,9 @@ async def lifespan(app: FastAPI):
     print(f"🚀 {settings.APP_NAME} v{settings.APP_VERSION} iniciando...")
     # Crea/verifica todas las tablas (create_all es idempotente)
     await create_tables()
-    print("✅ Tablas verificadas.")
+    # Inicializar datos semilla (Admin y Cliente DPP) si no existen
+    await init_db_data()
+    print("✅ Tablas verificadas y datos base listos.")
     # Reparación de integridad: estado ↔ firmado_digitalmente
     try:
         await _reparar_inconsistencias_firma()
